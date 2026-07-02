@@ -1,0 +1,82 @@
+TODO: 
+How to better manipulate identity in experiment? 
+Take advice-taking-related variables as outcome variables
+TODO: advice objectivity third-party
+Outline 2.0
+Propose: In supportive communication, people are sensitive to partner’s emotion and responsiveness. Yet little studies have explored how people perceive AI’s different sympathy-related emotions and identities in supportive conversations. 
+Research gaps:
+People tend to take anger as negative emotions, e.g. aggression and violence. But it could also engender positive effects, especially regarding to positive moral evaluations
+AI’s anger could have effects on people’s perceptions, but mainly through persuasive intensity and attentional salience, rather than from relational aspects.
+Still unclear about how to leverage AI’s identity to provide effective support and improve trustworthiness, and how AI’s identity generates psychological and affective effects in diff contexts. 
+Research questions: 
+Whether AI’s anger will impact people’s perceptions of and expressive reactions to AI? Whether people will be more likely to adopt angry AI’s advice? 
+⚠To be discussed
+Do we need to compare “neutral” emotion AI?
+Identity type: plan to manipulate the identity through voice
+Why 
+Ref.
+Male vs. female vs. gender-neutral (machine identity)
+Ingroup support
+Hwang, A. H. C., & Won, A. S. (2024, May). The sound of support: gendered voice agent as support to minority teammates in gender-imbalanced team. In Proceedings of the 2024 CHI Conference on Human Factors in Computing Systems (pp. 1-22).
+self-cloning voice (self) vs. machine voice (machine identity)
+Proteus effect: people’s behaviors adapt to the traits of their avatars in virtual worlds
+Fang, C. M., Chua, P., Chan, S. W., Leong, J., Bao, A., & Maes, P. (2025, April). Leveraging AI-generated emotional self-voice to nudge people towards their ideal selves. In Proceedings of the 2025 CHI Conference on Human Factors in Computing Systems (pp. 1-20).
+What we do: 
+Contributions: 
+Experiment Design
+Procedure
+Instruction -> Reading Scenarios -> Pre-test -> Chat with AI -> Post-test
+Scenario: unfairness scenario, and ask participants to discuss their negative feelings and coping strategies with AI. 
+[career violation] (advice-taking)
+我在一家会计公司工作。这家公司大多数工作任务都是以团队项目的形式完成的。项目团队中的每个人都会为项目做出贡献，并且所有成员都需要在最终成果提交给主管之前进行确认。上个月，我和部门里的五位同事一起完成了一个项目。
+后来我得知，主管在团队的几项计算中发现了一些小错误。主管把我单独叫了出来，只批评了我一个人，并因为团队犯下的错误训斥我。作为对这些错误的惩罚，我当月的工资被扣减了。之后我才知道，另外四位项目组成员并没有受到主管的批评，他们当月的工资也没有受到任何影响。
+Participants
+System Design
+Emotion Manipulation: voice and emoji and color
+Identity Manipulation: voice
+Measures
+前后测：What was your feeling when experiencing this situation? (1: Not angry at all-7: Very angry)
+Perceptions of AI
+（拟人化测量anthropomorphism）请根据以下量表评价你对该机器人的印象：
+虚假的-自然的
+像机器-像人
+缺乏意识的-有意识的
+人工的-有生命的 
+对话僵硬-对话灵动
+（生命感animacy）请根据以下量表评价你对该机器人的印象：
+死气沉沉的（Dead）-有生命的（Alive）
+缺乏活力的（Stagnant）-生气勃勃的（Lively）
+机械化的（Mechanical）-有机的（Organic）
+像机械的（Artificial）-像生物一样的（Lifelike）
+不活跃的（Inert）-可互动的（Interactive）
+冷漠的（Apathetic）-有反应的（Responsive）
+（喜爱度likability）请根据以下量表评价你对该机器人的印象：
+让人讨厌的（Dislike）-让人喜欢的（Like）
+不友好的（Unfriendly）-友好的（Friendly）
+不亲切的（Unkind）-亲切的（Kind）
+不愉快的（Unpleasant）-愉快的（Pleasant）
+糟糕的（Awful）-友善的（Nice）
+（响应度 responsiveness）请根据以下量表评价你对该机器人的印象：
+Perceived moral character of machine
+它具有分辨是非对错的能力。 
+它能够思考一个行为是否符合道德。 
+它可能会觉得自己有义务以合乎道德的方式行事。 
+它能够理性地思考善与恶。 
+它会按照道德规范行事。 
+它会避免做出带来痛苦后果的事情。
+Trust and advice-taking
+认知信任（Cognitive Trust）
+我可以没有任何顾虑地按照它的建议采取行动。 
+我有充分理由相信它的能力。
+它会认真处理我的问题，因此我可以放心依赖它。
+ 
+意见采纳意愿 (advice-taking willingness)
+如果我在职场发展中遇到一个棘手的选择问题，我会愿意再次使用这个聊天机器人。  
+我会毫不犹豫地采纳这个聊天机器人提供的沟通建议。
+情感信任（Affective Trust）
+它在回答我的问题时表现得很关心我。 
+它对我展现出温暖的态度。 
+我可以自由地向它倾诉我的问题，并相信它愿意倾听。 
+⚠有必要加一个写邮件的任务去测量信任吗？
+Johnson, D., & Grayson, K. (2005). Cognitive and affective trust in service relationships. Journal of Business research, 58(4), 500-507.
+Wilkinson, D., Alkan, Ö., Liao, Q. V., Mattetti, M., Vejsbjerg, I., Knijnenburg, B. P., & Daly, E. (2021). Why or why not? The effect of justification styles on chatbot recommendations. ACM Transactions on Information Systems (TOIS), 39(4), 1-21.

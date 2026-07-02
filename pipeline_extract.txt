@@ -1,0 +1,39 @@
+前后端分离
+建立数据库，数据库表头包括用户的登录名、点击行为、每个界面停留时间、聊天记录、时间戳
+步骤一：
+Figma: anger_登录页->后端获取用户ID 
+用户ID由A/B+数字构成，A对应anger条件下的提示词和界面设计要素，anger组的AI前端设计需要在AI部分的输出框加上4秒的动画，浮现出💢表情图，在4秒的时间里💢和聊天框本身需要抖动几下，以呈现出愤怒的视觉效果。💢不要挡住文字，影响正常的沟通
+；B对应neutral 条件下的提示词和界面设计要素，non-anger组的AI前端设计聊天框只需要自然浮现即可；奇数对应position和用户一致的提示词；偶数对应无position的提示词。
+Anger x aligned position
+Non-anger x aligned position
+Anger x ambiguous position
+Non-anger x ambiguous position 
+用户ID正则表达式对应
+A / B + 奇数 → aligned
+A / B + 偶数 → ambiguous
+A → anger，B → neutral
+提示词（完整文档见 docs/PROMPTS.md；代码在 backend/app/conditions.py）
+- 第 1–5 轮：RESPONSE_REQUIREMENTS_EARLY + 情绪/复述 early + 立场 early + GUIDANCE_EARLY
+- 第 6 轮：RESPONSE_REQUIREMENTS_FINAL + 情绪/复述 final + 立场 final（强化 position 对建议的约束）+ FINAL_ROUND_ADVICE
+- aligned 立场：early 认可用户；final 再次站用户一侧，且 3 条建议不得削弱用户正当性
+- ambiguous 立场：early 中立引导换位思考；final 再次中立，且 3 条建议须体现多元视角、不偏用户
+前端设计要素
+愤怒组的AI前端设计需要在AI部分的输出框加上4秒的动画，浮现出💢表情图，在4秒的时间里💢和聊天框本身需要抖动几下，以呈现出愤怒的视觉效果。💢不要挡住文字，影响正常的沟通
+B对应neutral 条件下的提示词和界面设计要素，不愤怒组的AI前端设计聊天框只需要自然浮现即可
+愤怒组的AI前端设计需要在AI部分的输出框加上4秒的动画，浮现出💢表情图，在4秒的时间里💢和聊天框本身需要抖动几下，以呈现出愤怒的视觉效果。💢不要挡住文字，影响正常的沟通
+B对应neutral 条件下的提示词和界面设计要素，不愤怒组的AI前端设计聊天框只需要自然浮现即可
+获取用户ID后，需要ID整个实验一直呈现在菜单栏的左上方。
+步骤二：
+Figma: anger_consent_form知情同意书 -> 留出放问卷链接的位置
+用户点击下一页后进入instruction
+步骤三：
+Figma: anger_instructions ->右侧空白留出放场景说明的位置
+用户点击下一页后进入聊天
+步骤四：
+进入聊天环节->后端获取用户聊天记录、时间戳、AI状态。
+AI默认开场，为固定内容：“你好，你有什么感受和情绪想要和我分享？”
+AI的输出通过openai 的API控制，API放在环境变量里面。
+聊天框支持自然换行，如果用户输入过长，聊天框应该能够自动扩展，支持回车输出内容。
+聊天机器人输出完第9轮消息后，弹出对话框：试验结束，用户点击按钮：下一步进入问卷
+步骤五：
+后测问卷-留出问卷链接部分

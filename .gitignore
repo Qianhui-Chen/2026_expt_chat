@@ -1,0 +1,39 @@
+# Python
+backend/.venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Secrets and local database
+backend/.env
+.env
+backend/experiment.db
+*.db
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+
+# Logs and caches
+*.log
+.npm
+.cache/
+
+# OS and IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Agent / local tooling (optional)
+agent-tools/
+agent-transcripts/
