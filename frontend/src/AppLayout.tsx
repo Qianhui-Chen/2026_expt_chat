@@ -19,11 +19,14 @@ export default function AppLayout() {
       <div className={`app-shell${isLogin ? " login-shell" : ""}`}>
         {!isLogin && session && (
           <header className="top-bar">
-            <div className="user-id-badge">
-              实验ID：{session.user_id}
-              {session.attempt_number > 1 ? `（第${session.attempt_number}次）` : ""}
+            <div className="top-bar-start">
+              <div className="user-id-badge">
+                实验ID：{session.user_id}
+                {session.attempt_number > 1 ? `（第${session.attempt_number}次）` : ""}
+              </div>
             </div>
-            {topBarAction && <div className="top-bar-actions">{topBarAction}</div>}
+            <div className="top-bar-center">{topBarAction}</div>
+            <div className="top-bar-end" aria-hidden="true" />
           </header>
         )}
         <main className={`page-content${isLogin ? " login-content" : ""}`}>

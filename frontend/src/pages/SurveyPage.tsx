@@ -1,16 +1,18 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { api, loadSession } from "../api";
 import { POST_SURVEY_URL } from "../config";
+import { useTopBarActions } from "../context/TopBarActionsContext";
 import { trackClick, usePageTracking } from "../hooks/usePageTracking";
 
 export default function SurveyPage() {
+  const { setTopBarAction } = useTopBarActions();
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   usePageTracking("survey");
 
-  const handleSubmit = async () => {
+  const handleSubmit = useCallback(async () => {
     const session = loadSession();
     if (!session) return;
 
@@ -25,7 +27,27 @@ export default function SurveyPage() {
     } finally {
       setSubmitting(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (submitted) {
+      setTopBarAction(null);
+      return;
+    }
+
+    setTopBarAction(
+      <button
+        type="button"
+        className="btn-pill btn-pill-nav"
+        onClick={() => void handleSubmit()}
+        disabled={submitting}
+      >
+        {submitting ? "提交中..." : "提交"}
+      </button>
+    );
+
+    return () => setTopBarAction(null);
+  }, [submitted, submitting, handleSubmit, setTopBarAction]);
 
   return (
     <>
@@ -40,11 +62,6 @@ export default function SurveyPage() {
           </div>
         </div>
         {error && <p className="error-text survey-error">{error}</p>}
-        <div className="flow-footer">
-          <button className="btn-pill" onClick={() => void handleSubmit()} disabled={submitting}>
-            {submitting ? "提交中..." : "提交"}
-          </button>
-        </div>
       </section>
 
       {submitted && (

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { api, clearSession, loadSession } from "../api";
@@ -11,12 +11,14 @@ import {
   INSTRUCTION_SCREENOUT_TITLE,
   INSTRUCTION_TITLE,
 } from "../content/instruction";
+import { useTopBarActions } from "../context/TopBarActionsContext";
 import { trackClick, usePageTracking } from "../hooks/usePageTracking";
 
 type ScreeningChoice = "yes" | "no";
 
 export default function InstructionPage() {
   const navigate = useNavigate();
+  const { setTopBarAction } = useTopBarActions();
   const [choice, setChoice] = useState<ScreeningChoice | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -48,7 +50,7 @@ export default function InstructionPage() {
       })
       .finally(() => setCheckingSession(false));
   }, [navigate]);
-  const handleContinue = async () => {
+  const handleContinue = useCallback(async () => {
     if (!choice) return;
 
     const session = loadSession();
@@ -83,7 +85,34 @@ export default function InstructionPage() {
     } finally {
       setSubmitting(false);
     }
-  };
+  }, [choice, navigate]);
+
+  useEffect(() => {
+    if (checkingSession || showScreenout) {
+      setTopBarAction(null);
+      return;
+    }
+
+    setTopBarAction(
+      <button
+        type="button"
+        className="btn-pill btn-pill-nav"
+        onClick={() => void handleContinue()}
+        disabled={!choice || submitting}
+      >
+        {submitting ? "提交中..." : "下一步"}
+      </button>
+    );
+
+    return () => setTopBarAction(null);
+  }, [
+    checkingSession,
+    showScreenout,
+    choice,
+    submitting,
+    handleContinue,
+    setTopBarAction,
+  ]);
 
   const handleDismissScreenout = () => {
     navigate("/login", { replace: true });
@@ -137,15 +166,6 @@ export default function InstructionPage() {
           </aside>
         </div>
         {error && <p className="error-text instruction-error">{error}</p>}
-        <div className="flow-footer">
-          <button
-            className="btn-pill"
-            onClick={() => void handleContinue()}
-            disabled={!choice || submitting}
-          >
-            {submitting ? "提交中..." : "下一步"}
-          </button>
-        </div>
           </>
         )}
       </section>

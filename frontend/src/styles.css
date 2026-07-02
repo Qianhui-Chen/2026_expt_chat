@@ -51,16 +51,24 @@ body {
   z-index: 20;
   height: var(--top-bar-height);
   background: var(--primary-blue-soft);
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  justify-content: space-between;
   gap: 16px;
   padding: 0 40px;
 }
 
-.top-bar-actions {
-  flex-shrink: 0;
-  margin-left: auto;
+.top-bar-start {
+  justify-self: start;
+  min-width: 0;
+}
+
+.top-bar-center {
+  justify-self: center;
+}
+
+.top-bar-end {
+  justify-self: end;
 }
 
 .user-id-badge {
@@ -201,6 +209,28 @@ body {
 .btn-pill-dark {
   background: var(--primary-blue);
   color: #ffffff;
+}
+
+.btn-pill-nav {
+  min-width: 280px;
+  height: 76px;
+  border-radius: 44px;
+  background: var(--primary-blue);
+  color: #ffffff;
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.24);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.btn-pill-nav:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28);
+}
+
+.btn-pill-nav:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 .error-text {
@@ -958,10 +988,14 @@ body {
   .top-bar {
     height: 72px;
     padding: 0 20px;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   }
 
   .user-id-badge {
     font-size: 28px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .page-content,
@@ -1002,6 +1036,12 @@ body {
     min-width: 180px;
     height: 56px;
     font-size: 24px;
+  }
+
+  .btn-pill-nav {
+    min-width: 200px;
+    height: 58px;
+    font-size: 26px;
   }
 
   .message-bubble {

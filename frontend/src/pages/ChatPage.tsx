@@ -134,7 +134,7 @@ type ChatMessageItem = {
 const INTRO_PROMPT = "请用不多于 80 个字描述你经历的事件内容、感受和情绪，并与AI进行分析和讨论；AI会基于你的经历给出对应建议。";
 const MAX_INTRO_LENGTH = 80;
 const END_PHASE_DELAY_MS = 20000;
-const END_DIALOG_MESSAGE = "对话结束，您可以点击右上角进入下一页";
+const END_DIALOG_MESSAGE = "对话结束，您可以点击顶部导航栏中间的「下一页」继续";
 
 export default function ChatPage() {
   const navigate = useNavigate();
@@ -190,7 +190,7 @@ export default function ChatPage() {
     }
 
     setTopBarAction(
-      <button type="button" className="btn-pill btn-pill-dark" onClick={() => void handleGoToSurvey()}>
+      <button type="button" className="btn-pill btn-pill-nav" onClick={() => void handleGoToSurvey()}>
         下一页
       </button>
     );
