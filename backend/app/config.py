@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_model: str = "deepseek-chat"
     deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_timeout_seconds: float = 60.0
     database_url: str = "sqlite:///./experiment.db"
     cors_origins: str = "http://localhost:5173"
 

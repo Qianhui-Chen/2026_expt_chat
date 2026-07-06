@@ -16,6 +16,8 @@ backend/.env
 .env
 backend/experiment.db
 *.db
+说明.md
+说明.txt
 
 # Node / frontend
 frontend/node_modules/

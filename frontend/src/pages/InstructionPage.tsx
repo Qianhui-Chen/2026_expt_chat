@@ -126,14 +126,7 @@ export default function InstructionPage() {
         ) : (
           <>
         <div className="flow-body instruction-body">
-          <div className="instruction-illustration">
-            <img
-              src="/assets/instruction-illustration.png"
-              alt="实验情境插图"
-              className="instruction-image"
-            />
-          </div>
-          <aside className="scenario-panel">
+          <div className="scenario-panel">
             <h2 className="scenario-title">{INSTRUCTION_TITLE}</h2>
             {INSTRUCTION_PARAGRAPHS.map((paragraph, index) => (
               <p key={index}>{paragraph}</p>
@@ -163,7 +156,7 @@ export default function InstructionPage() {
                 </label>
               </div>
             </fieldset>
-          </aside>
+          </div>
         </div>
         {error && <p className="error-text instruction-error">{error}</p>}
           </>
