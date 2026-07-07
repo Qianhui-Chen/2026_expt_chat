@@ -1,16 +1,16 @@
 /** Instruction 页展示文案（仅前端；后端 prompt 场景在 backend/app/conditions.py） */
 
 export const INSTRUCTION_TITLE =
-  "每个人都经历过人际关系中的冲突";
+  "每个人都经历过人际关系中的两难情景";
 
 export const INSTRUCTION_PARAGRAPHS = [
-"在与朋友、同学与同事（非爱情关系）的互动中，你是否曾经历过一些让你不舒服、不理解、不能释怀的时刻，而你又无法直接判断出关系中谁对谁错：",
-"比如: 朋友迟迟不回复你的消息",
-"又或者对方可能误解了你的意思，而你们又没有来得及说清",
+  "请回想一次你在与朋友、同学或同事（非恋爱或家人关系）的相处过程中经历过的不愉快事件。",
+  "在那次经历中，你感到被忽视，或因为对方的一些行为而感到没有被理解、不舒服。比如：对方答应了你的事情，却临时取消，让你觉得自己不被重视；或者是小组合作时，对方没有完成自己的任务，让你不得不承担更多工作。",
+  "你曾经反复思考这件事情，却始终不知道应该如何理解这次经历，也不知道怎样处理才是最好的选择。",
 ];
 
 export const INSTRUCTION_SCREENING_QUESTION =
-  "请回忆，在过去半年的时间里，你是否有过类似的经历？";
+  "请回忆，你是否有过类似的经历？";
 
 export const INSTRUCTION_SCREENING_YES = "有";
 export const INSTRUCTION_SCREENING_NO = "没有";
