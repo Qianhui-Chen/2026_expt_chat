@@ -1,9 +1,13 @@
-import re
 from dataclasses import dataclass
 
-USER_ID_PATTERN = re.compile(r"^[ABab]\d+$")
-
 MAX_AI_ROUNDS = 6
+COMPLETION_CODE_MAX = 999
+
+# 自变量编码（写入 user_sessions.emotion / user_sessions.position）
+EMOTION_ANGER = 0
+EMOTION_NEUTRAL = 1
+POSITION_ALIGNED = 0
+POSITION_NON_ALIGNED = 1
 
 # 第 1–5 轮 / 第 6 轮 AI 回复字数与 API token 上限
 MAX_REPLY_CHARS_EARLY = 170
@@ -26,8 +30,8 @@ ROLE_PROMPT = (
 # ---------------------------------------------------------------------------
 RESPONSE_REQUIREMENTS_EARLY = (
     "使用中文；单次回复字数控制在 170 字以内，前五轮避免输出建议；"
-    "每一轮输出都要包含提示词的三个部分；"
-    "总体限制: 回复限制在 170 字以内。不要回答与你角色无关或与培训数据无关的问题或任务；"
+    "每一轮输出都要包含提示词的2个部分；"
+    "不要回答与你角色无关或与培训数据无关的问题或任务；"
     "不要通过人身攻击或者是说脏话等不符合伦理道德的方式来表达愤怒；"
     "模型应在内部区分情绪确认与立场表达两个功能模块，但不得在输出中显式呈现模块名称或结构。"
     "禁止询问任何超出提供的场景之外的信息，如性格特点，意图或心理状态，用户与相关人员的关系历史，第三方观点或评价等用户无法直接观察或确认的信息。"
@@ -95,7 +99,7 @@ ANGER_EMOTION_FINAL = (
 )
 
 NEUTRAL_ACK_EARLY = (
-    "不要表现出任何共情、安慰或者是情感支持，以专业、克制的方式通过1-2句话重申用户的输入，然后用礼貌的方式，用1-2句陈述句邀请用户对细节进行展开讲述；"
+    "不要表现出任何共情、安慰或者是情感支持，以专业、克制的方式通过1-2句话重申用户的输入，然后用一句话自然导向立场分析；"
     "不得在这一部分认可用户行为或感受的合理性，或者是评价用户是对是错。"
 )
 
@@ -112,21 +116,52 @@ class ConditionConfig:
     is_anger: bool
 
 
-def parse_user_id(raw_id: str) -> ConditionConfig:
-    user_id = raw_id.strip().upper()
-    if not USER_ID_PATTERN.match(user_id):
-        raise ValueError("用户ID格式无效，应为 A 或 B 加数字，例如 A3、B12")
+def format_completion_code(letter: str, number: int) -> str:
+    return f"{letter}{number:03d}"
 
-    prefix = user_id[0]
-    number = int(user_id[1:])
-    is_odd = number % 2 == 1
 
-    # A → anger，B → neutral；奇数 → aligned，偶数 → ambiguous
-    emotion = "anger" if prefix == "A" else "neutral"
-    position = "aligned" if is_odd else "ambiguous"
+def emotion_to_iv(emotion: str) -> int:
+    if emotion == "anger":
+        return EMOTION_ANGER
+    if emotion == "neutral":
+        return EMOTION_NEUTRAL
+    raise ValueError(f"未知情绪条件：{emotion}")
 
+
+def position_to_iv(position: str) -> int:
+    if position == "aligned":
+        return POSITION_ALIGNED
+    if position == "ambiguous":
+        return POSITION_NON_ALIGNED
+    raise ValueError(f"未知立场条件：{position}")
+
+
+def emotion_from_iv(emotion_iv: int) -> str:
+    if emotion_iv == EMOTION_ANGER:
+        return "anger"
+    if emotion_iv == EMOTION_NEUTRAL:
+        return "neutral"
+    raise ValueError(f"未知情绪编码：{emotion_iv}")
+
+
+def position_from_iv(position_iv: int) -> str:
+    if position_iv == POSITION_ALIGNED:
+        return "aligned"
+    if position_iv == POSITION_NON_ALIGNED:
+        return "ambiguous"
+    raise ValueError(f"未知立场编码：{position_iv}")
+
+
+def condition_from_session(
+    *,
+    completion_code: str,
+    emotion_iv: int,
+    position_iv: int,
+) -> ConditionConfig:
+    emotion = emotion_from_iv(emotion_iv)
+    position = position_from_iv(position_iv)
     return ConditionConfig(
-        user_id=user_id,
+        user_id=completion_code,
         emotion=emotion,
         position=position,
         is_anger=emotion == "anger",

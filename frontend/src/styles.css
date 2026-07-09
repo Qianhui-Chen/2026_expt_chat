@@ -336,47 +336,6 @@ body {
   font-weight: 500;
 }
 
-.screening-fieldset {
-  margin: 28px 0 0;
-  padding: 0;
-  border: 0;
-}
-
-.screening-question {
-  margin: 0 0 16px;
-  padding: 0;
-  font-size: var(--fs-body-lg);
-  font-weight: 500;
-  line-height: 1.6;
-}
-
-.screening-options {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.screening-option {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: var(--fs-body);
-  line-height: 1.5;
-  cursor: pointer;
-}
-
-.screening-option input {
-  width: 18px;
-  height: 18px;
-  margin: 0;
-  flex-shrink: 0;
-}
-
-.instruction-error {
-  padding: 0 40px 8px;
-  text-align: right;
-}
-
 .instruction-loading {
   flex: 1;
   display: flex;
@@ -384,6 +343,35 @@ body {
   justify-content: center;
   font-size: var(--fs-body-lg);
   color: var(--text-muted);
+}
+
+.instruction-error {
+  padding: 0 40px 8px;
+  text-align: center;
+}
+
+.completion-code-card {
+  gap: 20px;
+}
+
+.completion-code-message {
+  margin: 0;
+  font-size: var(--fs-body-lg);
+  line-height: 1.5;
+  text-align: center;
+}
+
+.completion-code-value {
+  margin: 0;
+  font-size: clamp(36px, 8vw, 52px);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.completion-code-copy {
+  min-width: 180px;
+  height: 52px;
+  font-size: var(--fs-body);
 }
 
 /* Survey */

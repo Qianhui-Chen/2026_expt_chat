@@ -1,4 +1,6 @@
 import json
+import random
+import re
 import time
 from collections.abc import Generator, Iterator
 from datetime import datetime
@@ -7,12 +9,18 @@ from openai import APIConnectionError, APIError, APITimeoutError, Authentication
 from sqlalchemy.orm import Session
 
 from app.conditions import (
+    COMPLETION_CODE_MAX,
     MAX_AI_ROUNDS,
     ConditionConfig,
+    condition_from_session,
+    emotion_from_iv,
+    emotion_to_iv,
+    format_completion_code,
     get_max_reply_tokens,
     get_system_prompt,
     get_temperature,
-    parse_user_id,
+    position_from_iv,
+    position_to_iv,
 )
 from app.config import settings
 from app.database import SessionLocal
@@ -29,9 +37,130 @@ PLACEHOLDER_API_KEYS = frozenset(
 
 MOCK_STREAM_CHAR_DELAY_SEC = 0.025
 
+_COMPLETION_CODE_RE = re.compile(r"^[AB]\d{3}$")
+
+_CONDITION_GROUPS: tuple[tuple[str, str, str, bool], ...] = (
+    ("anger", "aligned", "A", True),
+    ("anger", "ambiguous", "A", False),
+    ("neutral", "aligned", "B", True),
+    ("neutral", "ambiguous", "B", False),
+)
+
+
+def session_condition(session: UserSession) -> ConditionConfig:
+    code = session.completion_code or session.user_id
+    return condition_from_session(
+        completion_code=code,
+        emotion_iv=session.emotion,
+        position_iv=session.position,
+    )
+
+
+def _parse_code_number(code: str, letter: str) -> int | None:
+    if not code or len(code) != 4 or code[0] != letter:
+        return None
+    try:
+        return int(code[1:])
+    except ValueError:
+        return None
+
+
+def _used_numbers_for_letter_parity(db: Session, letter: str, want_odd: bool) -> set[int]:
+    rows = (
+        db.query(UserSession.completion_code, UserSession.user_id)
+        .filter(
+            (UserSession.completion_code.like(f"{letter}%"))
+            | (UserSession.user_id.like(f"{letter}%"))
+        )
+        .all()
+    )
+    used: set[int] = set()
+    for completion_code, user_id in rows:
+        for code in (completion_code, user_id):
+            number = _parse_code_number(code or "", letter)
+            if number is None:
+                continue
+            if (number % 2 == 1) == want_odd:
+                used.add(number)
+    return used
+
+
+def _next_code_number(want_odd: bool, used: set[int]) -> int:
+    number = 1 if want_odd else 2
+    while number <= COMPLETION_CODE_MAX:
+        if number not in used:
+            return number
+        number += 2
+    raise ValueError("该组完成代码已用完")
+
+
+def _pick_balanced_condition(db: Session) -> tuple[str, str, str, bool]:
+    counts: dict[tuple[str, str], int] = {}
+    for emotion_label, position_label, _, _ in _CONDITION_GROUPS:
+        key = (emotion_label, position_label)
+        counts[key] = (
+            db.query(UserSession)
+            .filter(
+                UserSession.emotion_label == emotion_label,
+                UserSession.position_label == position_label,
+            )
+            .count()
+        )
+    min_count = min(counts.values())
+    candidates = [key for key, count in counts.items() if count == min_count]
+    emotion, position = random.choice(candidates)
+    for group_emotion, group_position, letter, want_odd in _CONDITION_GROUPS:
+        if group_emotion == emotion and group_position == position:
+            return emotion, position, letter, want_odd
+    raise ValueError("无法分配实验条件")
+
+
+def resolve_completion_code(db: Session, session: UserSession) -> str:
+    """返回 A001 格式完成代码；旧纯数字记录会按分组规则补全。"""
+    for candidate in (session.completion_code, session.user_id):
+        if candidate and _COMPLETION_CODE_RE.match(candidate):
+            if session.completion_code != candidate or session.user_id != candidate:
+                session.completion_code = candidate
+                session.user_id = candidate
+                db.commit()
+                db.refresh(session)
+            return candidate
+
+    letter = "A" if session.emotion_label == "anger" else "B"
+    want_odd = session.position_label == "aligned"
+    used = _used_numbers_for_letter_parity(db, letter, want_odd)
+    number = _next_code_number(want_odd, used)
+    code = format_completion_code(letter, number)
+    session.completion_code = code
+    session.user_id = code
+    db.commit()
+    db.refresh(session)
+    return code
+
+
+def start_anonymous_session(db: Session) -> tuple[UserSession, ConditionConfig]:
+    emotion_label, position_label, letter, want_odd = _pick_balanced_condition(db)
+    used = _used_numbers_for_letter_parity(db, letter, want_odd)
+    number = _next_code_number(want_odd, used)
+    completion_code = format_completion_code(letter, number)
+
+    session = UserSession(
+        user_id=completion_code,
+        completion_code=completion_code,
+        emotion=emotion_to_iv(emotion_label),
+        position=position_to_iv(position_label),
+        emotion_label=emotion_label,
+        position_label=position_label,
+        attempt_number=1,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session, session_condition(session)
+
 
 def _temperature_for_session(session: UserSession, ai_round: int) -> float:
-    return get_temperature(session.emotion, ai_round)
+    return get_temperature(session.emotion_label, ai_round)
 
 
 def _llm_error_message(exc: Exception) -> str:
@@ -65,38 +194,10 @@ def _get_llm_client() -> OpenAI:
     )
 
 
-def _create_session(db: Session, condition: ConditionConfig, attempt_number: int) -> UserSession:
-    session = UserSession(
-        user_id=condition.user_id,
-        emotion=condition.emotion,
-        position=condition.position,
-        attempt_number=attempt_number,
-    )
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-    return session
-
-
-def get_or_create_session(db: Session, raw_user_id: str) -> tuple[UserSession, ConditionConfig]:
-    condition = parse_user_id(raw_user_id)
-    latest = (
-        db.query(UserSession)
-        .filter(UserSession.user_id == condition.user_id)
-        .order_by(UserSession.attempt_number.desc(), UserSession.id.desc())
-        .first()
-    )
-    if latest is None:
-        return _create_session(db, condition, 1), condition
-    if latest.experiment_finished:
-        return _create_session(db, condition, latest.attempt_number + 1), condition
-    return latest, condition
-
-
 def get_session_by_token(db: Session, session_token: int) -> UserSession:
     session = db.query(UserSession).filter(UserSession.id == session_token).first()
     if session is None:
-        raise ValueError("会话不存在，请重新登录")
+        raise ValueError("会话不存在，请重新开始实验")
     return session
 
 
@@ -161,29 +262,6 @@ def complete_experiment(db: Session, session: UserSession) -> UserSession:
     return session
 
 
-def record_instruction_screening(
-    db: Session, session: UserSession, has_similar_experience: bool
-) -> bool:
-    if session.has_similar_experience is not None:
-        return bool(session.has_similar_experience)
-    if session.experiment_finished:
-        raise ValueError("实验已结束")
-
-    session.has_similar_experience = 1 if has_similar_experience else 0
-
-    if has_similar_experience:
-        db.commit()
-        db.refresh(session)
-        return True
-
-    session.chat_finished = 1
-    session.experiment_finished = 1
-    session.exit_reason = "no_similar_experience"
-    db.commit()
-    db.refresh(session)
-    return False
-
-
 def send_user_message(db: Session, session: UserSession, message: str) -> tuple[ChatMessage, ChatMessage | None, bool]:
     user_msg = save_user_message(db, session, message)
 
@@ -198,9 +276,8 @@ def send_user_message(db: Session, session: UserSession, message: str) -> tuple[
 
 def _build_chat_messages(db: Session, session: UserSession) -> list[dict[str, str]]:
     history = list_chat_messages(db, session)
-    condition = parse_user_id(session.user_id)
     next_round = session.ai_round_count + 1
-    system_prompt = get_system_prompt(condition.emotion, condition.position, next_round)
+    system_prompt = get_system_prompt(session.emotion_label, session.position_label, next_round)
     messages = [{"role": "system", "content": system_prompt}]
     for item in history:
         if item.role in {"user", "assistant"}:
@@ -304,7 +381,7 @@ def _generate_ai_reply(db: Session, session: UserSession) -> str:
 
 def _mock_ai_reply(session: UserSession) -> str:
     round_no = session.ai_round_count + 1
-    if session.emotion == "anger":
+    if session.emotion_label == "anger":
         return f"这确实太不公平了！（第{round_no}轮模拟回复，请配置 DEEPSEEK_API_KEY 以启用真实对话。）"
     return f"我理解你的感受，我们可以慢慢聊聊。（第{round_no}轮模拟回复，请配置 DEEPSEEK_API_KEY 以启用真实对话。）"
 
@@ -326,7 +403,7 @@ def stream_chat_events(session_token: int, message: str) -> Generator[str, None,
     db = SessionLocal()
     try:
         session = get_session_by_token(db, session_token)
-        condition = parse_user_id(session.user_id)
+        condition = session_condition(session)
         user_msg = save_user_message(db, session, message)
         yield _sse_event("user_message", _message_to_dict(user_msg))
 

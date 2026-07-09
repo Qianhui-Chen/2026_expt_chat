@@ -7,29 +7,25 @@ import "./styles.css";
 export default function AppLayout() {
   const session = loadSession();
   const location = useLocation();
-  const isLogin = location.pathname === "/login";
+  const isInstruction = location.pathname === "/instruction";
+  const showTopBar = isInstruction || Boolean(session);
   const [topBarAction, setTopBarAction] = useState<ReactNode>(null);
 
-  if (!session && !isLogin) {
-    return <Navigate to="/login" replace />;
+  if (!session && !isInstruction) {
+    return <Navigate to="/instruction" replace />;
   }
 
   return (
     <TopBarActionsContext.Provider value={{ setTopBarAction }}>
-      <div className={`app-shell${isLogin ? " login-shell" : ""}`}>
-        {!isLogin && session && (
+      <div className="app-shell">
+        {showTopBar && (
           <header className="top-bar">
-            <div className="top-bar-start">
-              <div className="user-id-badge">
-                实验ID：{session.user_id}
-                {session.attempt_number > 1 ? `（第${session.attempt_number}次）` : ""}
-              </div>
-            </div>
+            <div className="top-bar-start" aria-hidden="true" />
             <div className="top-bar-center">{topBarAction}</div>
             <div className="top-bar-end" aria-hidden="true" />
           </header>
         )}
-        <main className={`page-content${isLogin ? " login-content" : ""}`}>
+        <main className="page-content">
           <Outlet />
         </main>
       </div>

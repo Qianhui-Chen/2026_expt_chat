@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.conditions import MAX_AI_ROUNDS, parse_user_id
+from app.conditions import MAX_AI_ROUNDS
 from app.database import get_db
 from app.models import ClickEvent, PageEvent
 from app.schemas import (
@@ -14,21 +14,20 @@ from app.schemas import (
     ChatSendResponse,
     ClickEventRequest,
     CompleteExperimentRequest,
-    InstructionScreeningRequest,
-    InstructionScreeningResponse,
-    LoginRequest,
-    LoginResponse,
+    CompleteExperimentResponse,
     PageEnterRequest,
     PageLeaveRequest,
     SessionResponse,
+    StartSessionResponse,
 )
 from app.services import (
     complete_experiment,
-    get_or_create_session,
     get_session_by_token,
     list_chat_messages,
-    record_instruction_screening,
+    resolve_completion_code,
     send_user_message,
+    session_condition,
+    start_anonymous_session,
     stream_chat_events,
 )
 
@@ -42,20 +41,14 @@ def get_config():
     }
 
 
-@router.post("/login", response_model=LoginResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    try:
-        session, condition = get_or_create_session(db, payload.user_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return LoginResponse(
+@router.post("/session/start", response_model=StartSessionResponse)
+def start_session(db: Session = Depends(get_db)):
+    session, condition = start_anonymous_session(db)
+    return StartSessionResponse(
         session_token=session.id,
-        user_id=condition.user_id,
         attempt_number=session.attempt_number,
-        emotion=condition.emotion,
-        position=condition.position,
         is_anger=condition.is_anger,
+        completion_code=resolve_completion_code(db, session),
     )
 
 
@@ -63,28 +56,23 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
 def get_session(session_token: int, db: Session = Depends(get_db)):
     try:
         session = get_session_by_token(db, session_token)
-        condition = parse_user_id(session.user_id)
+        condition = session_condition(session)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    completion_code = resolve_completion_code(db, session)
+
     return SessionResponse(
-        user_id=session.user_id,
         attempt_number=session.attempt_number,
-        emotion=condition.emotion,
-        position=condition.position,
         is_anger=condition.is_anger,
         ai_round_count=session.ai_round_count,
         chat_finished=bool(session.chat_finished),
         experiment_finished=bool(session.experiment_finished),
-        has_similar_experience=(
-            bool(session.has_similar_experience)
-            if session.has_similar_experience is not None
-            else None
-        ),
+        completion_code=completion_code,
     )
 
 
-@router.post("/experiment/complete")
+@router.post("/experiment/complete", response_model=CompleteExperimentResponse)
 def finish_experiment(payload: CompleteExperimentRequest, db: Session = Depends(get_db)):
     try:
         session = get_session_by_token(db, payload.session_token)
@@ -92,26 +80,8 @@ def finish_experiment(payload: CompleteExperimentRequest, db: Session = Depends(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    return {"ok": True, "attempt_number": session.attempt_number}
-
-
-@router.post("/instruction/screening", response_model=InstructionScreeningResponse)
-def submit_instruction_screening(
-    payload: InstructionScreeningRequest, db: Session = Depends(get_db)
-):
-    try:
-        session = get_session_by_token(db, payload.session_token)
-        continue_experiment = record_instruction_screening(
-            db, session, payload.has_similar_experience
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return InstructionScreeningResponse(
-        ok=True,
-        continue_experiment=continue_experiment,
-        exit_reason=session.exit_reason,
-    )
+    completion_code = resolve_completion_code(db, session)
+    return CompleteExperimentResponse(ok=True, completion_code=completion_code)
 
 
 @router.post("/events/click")
@@ -170,7 +140,7 @@ def log_page_leave(payload: PageLeaveRequest, db: Session = Depends(get_db)):
 def get_chat_history(session_token: int, db: Session = Depends(get_db)):
     try:
         session = get_session_by_token(db, session_token)
-        condition = parse_user_id(session.user_id)
+        condition = session_condition(session)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -196,7 +166,7 @@ def get_chat_history(session_token: int, db: Session = Depends(get_db)):
 def send_chat_message(payload: ChatSendRequest, db: Session = Depends(get_db)):
     try:
         session = get_session_by_token(db, payload.session_token)
-        condition = parse_user_id(session.user_id)
+        condition = session_condition(session)
         user_msg, ai_msg, finished = send_user_message(db, session, payload.message)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

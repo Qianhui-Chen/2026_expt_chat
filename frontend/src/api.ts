@@ -1,22 +1,17 @@
-export interface LoginResponse {
+export interface SessionState {
   session_token: number;
-  user_id: string;
   attempt_number: number;
-  emotion: string;
-  position: string;
   is_anger: boolean;
+  completion_code: string;
 }
 
 export interface SessionResponse {
-  user_id: string;
   attempt_number: number;
-  emotion: string;
-  position: string;
   is_anger: boolean;
   ai_round_count: number;
   chat_finished: boolean;
   experiment_finished: boolean;
-  has_similar_experience: boolean | null;
+  completion_code: string;
 }
 
 export interface ChatMessageDTO {
@@ -60,12 +55,6 @@ export interface AppConfig {
   max_ai_rounds: number;
 }
 
-export interface InstructionScreeningResponse {
-  ok: boolean;
-  continue_experiment: boolean;
-  exit_reason: string | null;
-}
-
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
@@ -107,20 +96,14 @@ function parseSseBlock(block: string): { event: string; data: string } | null {
 
 export const api = {
   getConfig: () => request<AppConfig>("/api/config"),
-  submitInstructionScreening: (session_token: number, has_similar_experience: boolean) =>
-    request<InstructionScreeningResponse>("/api/instruction/screening", {
+  startSession: () =>
+    request<SessionState>("/api/session/start", {
       method: "POST",
-      body: JSON.stringify({ session_token, has_similar_experience }),
-    }),
-  login: (user_id: string) =>
-    request<LoginResponse>("/api/login", {
-      method: "POST",
-      body: JSON.stringify({ user_id }),
     }),
   getSession: (session_token: number) =>
     request<SessionResponse>(`/api/session/${session_token}`),
   completeExperiment: (session_token: number) =>
-    request<{ ok: boolean; attempt_number: number }>("/api/experiment/complete", {
+    request<{ ok: boolean; completion_code: string }>("/api/experiment/complete", {
       method: "POST",
       body: JSON.stringify({ session_token }),
     }),
@@ -234,15 +217,15 @@ export const api = {
 
 export const SESSION_KEY = "anger_experiment_session";
 
-export function saveSession(data: LoginResponse) {
+export function saveSession(data: SessionState) {
   localStorage.setItem(SESSION_KEY, JSON.stringify(data));
 }
 
-export function loadSession(): LoginResponse | null {
+export function loadSession(): SessionState | null {
   const raw = localStorage.getItem(SESSION_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as LoginResponse;
+    return JSON.parse(raw) as SessionState;
   } catch {
     return null;
   }
@@ -250,4 +233,30 @@ export function loadSession(): LoginResponse | null {
 
 export function clearSession() {
   localStorage.removeItem(SESSION_KEY);
+}
+
+export async function ensureActiveSession(): Promise<SessionState> {
+  const existing = loadSession();
+  if (existing) {
+    try {
+      const data = await api.getSession(existing.session_token);
+      if (!data.experiment_finished) {
+        const session: SessionState = {
+          session_token: existing.session_token,
+          attempt_number: data.attempt_number,
+          is_anger: data.is_anger,
+          completion_code: data.completion_code,
+        };
+        saveSession(session);
+        return session;
+      }
+      clearSession();
+    } catch {
+      clearSession();
+    }
+  }
+
+  const started = await api.startSession();
+  saveSession(started);
+  return started;
 }

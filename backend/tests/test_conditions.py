@@ -1,35 +1,12 @@
 import unittest
 
-from app.conditions import get_system_prompt, get_temperature, parse_user_id
+from app.conditions import format_completion_code, get_system_prompt, get_temperature
 
 
 class ConditionTests(unittest.TestCase):
-    def test_a_odd_aligned_anger(self):
-        config = parse_user_id("A3")
-        self.assertEqual(config.emotion, "anger")
-        self.assertEqual(config.position, "aligned")
-        self.assertTrue(config.is_anger)
-
-    def test_b_odd_aligned_neutral(self):
-        config = parse_user_id("B7")
-        self.assertEqual(config.emotion, "neutral")
-        self.assertEqual(config.position, "aligned")
-        self.assertFalse(config.is_anger)
-
-    def test_b_even_ambiguous_neutral(self):
-        config = parse_user_id("B12")
-        self.assertEqual(config.emotion, "neutral")
-        self.assertEqual(config.position, "ambiguous")
-        self.assertFalse(config.is_anger)
-
-    def test_a_even_ambiguous_anger(self):
-        config = parse_user_id("A4")
-        self.assertEqual(config.emotion, "anger")
-        self.assertEqual(config.position, "ambiguous")
-
-    def test_invalid_id(self):
-        with self.assertRaises(ValueError):
-            parse_user_id("C1")
+    def test_format_completion_code(self):
+        self.assertEqual(format_completion_code("A", 1), "A001")
+        self.assertEqual(format_completion_code("B", 2), "B002")
 
     def test_aligned_stance_differs_early_vs_final(self):
         early = get_system_prompt("neutral", "aligned", ai_round=3)
@@ -51,13 +28,11 @@ class ConditionTests(unittest.TestCase):
         self.assertIn("一字不改、不得同义替换、不得合并", final)
         self.assertIn("具体做法：", final)
         self.assertIn("(a) 改变伴侣对矛盾的认知；", final)
-        self.assertIn("(d) 发掘并强化双方的优势。", final)
-        self.assertNotIn("建议输出（本轮核心任务）", final)
 
     def test_final_round_uses_lower_temperature(self):
-        self.assertEqual(get_temperature("anger", ai_round=5), 0.9)
-        self.assertEqual(get_temperature("anger", ai_round=6), 0.4)
-        self.assertEqual(get_temperature("neutral", ai_round=6), 0.4)
+        self.assertEqual(get_temperature("anger", ai_round=5), 0.4)
+        self.assertEqual(get_temperature("anger", ai_round=6), 0.2)
+        self.assertEqual(get_temperature("neutral", ai_round=6), 0.2)
 
 
 if __name__ == "__main__":

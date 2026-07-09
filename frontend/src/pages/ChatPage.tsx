@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, loadSession } from "../api";
-import { POST_SURVEY_URL } from "../config";
+import { api, loadSession, saveSession } from "../api";
 import { useTopBarActions } from "../context/TopBarActionsContext";
 import { trackClick, usePageTracking } from "../hooks/usePageTracking";
 import { MAX_ANGER_METER, getAngerMeterLevel, getPendingAngerMeterLevel } from "../utils/angerMeter";
@@ -133,7 +132,25 @@ type ChatMessageItem = {
 
 const INTRO_PROMPT = "请用不多于 80 个字描述你经历的事件内容、感受和情绪，并与AI进行分析和讨论；AI会基于你的经历给出对应建议。";
 const MAX_INTRO_LENGTH = 80;
-const NEXT_STEP_COUNTDOWN_SEC = 5;
+const NEXT_STEP_COUNTDOWN_SEC = 8;
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    return copied;
+  }
+}
 
 export default function ChatPage() {
   const { setTopBarAction } = useTopBarActions();
@@ -146,6 +163,10 @@ export default function ChatPage() {
   const [aiRoundCount, setAiRoundCount] = useState(0);
   const [maxRounds, setMaxRounds] = useState(6);
   const [chatFinished, setChatFinished] = useState(false);
+  const [experimentFinished, setExperimentFinished] = useState(false);
+  const [completionCode, setCompletionCode] = useState<string | null>(null);
+  const [showCompletionModal, setShowCompletionModal] = useState(false);
+  const [idCopied, setIdCopied] = useState(false);
   const [nextStepCountdown, setNextStepCountdown] = useState<number | null>(null);
   const [nextStepSubmitting, setNextStepSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -162,18 +183,44 @@ export default function ChatPage() {
     setError("");
     try {
       await trackClick("chat", "next-step");
-      await api.completeExperiment(session.session_token);
-      window.open(POST_SURVEY_URL, "_blank", "noopener,noreferrer");
+      if (experimentFinished && completionCode) {
+        setShowCompletionModal(true);
+        return;
+      }
+      const result = await api.completeExperiment(session.session_token);
+      const code = result.completion_code || session.completion_code;
+      setCompletionCode(code);
+      saveSession({ ...session, completion_code: code });
+      setExperimentFinished(true);
+      setShowCompletionModal(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "跳转失败");
+      setError(err instanceof Error ? err.message : "操作失败");
     } finally {
       setNextStepSubmitting(false);
     }
-  }, [nextStepCountdown, nextStepSubmitting]);
+  }, [nextStepCountdown, nextStepSubmitting, completionCode, experimentFinished]);
+
+  const handleCopyCompletionId = useCallback(async () => {
+    if (!completionCode) return;
+
+    const copied = await copyTextToClipboard(completionCode);
+    if (copied) {
+      setIdCopied(true);
+      void trackClick("chat", "copy-completion-id");
+      window.setTimeout(() => setIdCopied(false), 2000);
+    } else {
+      setError("复制失败，请手动选择上方 ID 复制");
+    }
+  }, [completionCode]);
 
   useEffect(() => {
     if (!chatFinished) {
       setNextStepCountdown(null);
+      return;
+    }
+
+    if (experimentFinished) {
+      setNextStepCountdown(0);
       return;
     }
 
@@ -197,7 +244,7 @@ export default function ChatPage() {
         countdownTimerRef.current = null;
       }
     };
-  }, [chatFinished]);
+  }, [chatFinished, experimentFinished]);
 
   useEffect(() => {
     if (!chatFinished || nextStepCountdown === null) {
@@ -231,12 +278,26 @@ export default function ChatPage() {
     const session = loadSession();
     if (!session) return;
 
-    void Promise.all([api.getConfig(), api.getChatHistory(session.session_token)])
-      .then(([config, history]) => {
+    void Promise.all([
+      api.getConfig(),
+      api.getChatHistory(session.session_token),
+      api.getSession(session.session_token),
+    ])
+      .then(([config, history, sessionInfo]) => {
         setMaxRounds(config.max_ai_rounds);
         setIsAnger(history.is_anger);
         setAiRoundCount(history.ai_round_count);
         setChatFinished(history.chat_finished);
+        if (sessionInfo.completion_code) {
+          setCompletionCode(sessionInfo.completion_code);
+          const stored = loadSession();
+          if (stored) {
+            saveSession({ ...stored, completion_code: sessionInfo.completion_code });
+          }
+        }
+        if (sessionInfo.experiment_finished) {
+          setExperimentFinished(true);
+        }
         setMessages(
           history.messages
             .filter(
@@ -472,55 +533,80 @@ export default function ChatPage() {
   };
 
   return (
-    <section className="flow-page chat-page">
-      <div className="chat-window" ref={chatWindowRef}>
-        {messages.map((message) => (
-          <MessageBubble
-            key={message.key}
-            role={message.role}
-            content={message.content}
-            isAnger={isAnger}
-            animate={message.key === latestAnimatedKey}
-            isThinking={message.isThinking}
-            isStreaming={message.isStreaming}
-            angerLevel={getAngerLevel(message)}
-            maxAngerMeter={MAX_ANGER_METER}
-          />
-        ))}
-      </div>
-      {error && <p className="error-text chat-error">{error}</p>}
-      <div className="chat-composer">
-        {!chatFinished && (
-          <p className="chat-input-hint">请输入你的问题</p>
-        )}
-        {chatFinished && (
-          <p className="chat-input-hint chat-input-hint-muted">聊天已结束</p>
-        )}
-        <div className="chat-input-bar">
-          <textarea
-            ref={textareaRef}
-            className="chat-textarea"
-            value={input}
-            onChange={handleInput}
-            onKeyDown={handleKeyDown}
-            rows={1}
-            disabled={chatFinished || sending}
-            aria-label={chatFinished ? "聊天已结束" : "请输入你的问题"}
-          />
-          <button
-            type="button"
-            className="chat-send-btn"
-            onClick={() => void handleSend()}
-            disabled={chatFinished || sending || !input.trim()}
-            aria-label="发送"
-          >
-            <SendIcon />
-          </button>
+    <>
+      <section className="flow-page chat-page">
+        <div className="chat-window" ref={chatWindowRef}>
+          {messages.map((message) => (
+            <MessageBubble
+              key={message.key}
+              role={message.role}
+              content={message.content}
+              isAnger={isAnger}
+              animate={message.key === latestAnimatedKey}
+              isThinking={message.isThinking}
+              isStreaming={message.isStreaming}
+              angerLevel={getAngerLevel(message)}
+              maxAngerMeter={MAX_ANGER_METER}
+            />
+          ))}
         </div>
-        <p className="chat-progress" aria-live="polite">
-          {sending ? "AI 正在思考…" : `AI 回复进度：${aiRoundCount}/${maxRounds}`}
-        </p>
-      </div>
-    </section>
+        {error && <p className="error-text chat-error">{error}</p>}
+        <div className="chat-composer">
+          {!chatFinished && (
+            <p className="chat-input-hint">请输入你的问题</p>
+          )}
+          {chatFinished && (
+            <p className="chat-input-hint chat-input-hint-muted">聊天已结束</p>
+          )}
+          <div className="chat-input-bar">
+            <textarea
+              ref={textareaRef}
+              className="chat-textarea"
+              value={input}
+              onChange={handleInput}
+              onKeyDown={handleKeyDown}
+              rows={1}
+              disabled={chatFinished || sending}
+              aria-label={chatFinished ? "聊天已结束" : "请输入你的问题"}
+            />
+            <button
+              type="button"
+              className="chat-send-btn"
+              onClick={() => void handleSend()}
+              disabled={chatFinished || sending || !input.trim()}
+              aria-label="发送"
+            >
+              <SendIcon />
+            </button>
+          </div>
+          <p className="chat-progress" aria-live="polite">
+            {sending ? "AI 正在思考…" : `AI 回复进度：${aiRoundCount}/${maxRounds}`}
+          </p>
+        </div>
+      </section>
+
+      {showCompletionModal && completionCode && (
+        <div className="modal-backdrop" role="presentation">
+          <div
+            className="modal-card completion-code-card"
+            role="dialog"
+            aria-modal="true"
+            aria-label="完成代码"
+          >
+            <p className="completion-code-message">
+              请复制您的ID，填入刚才的问卷，并且完成后测题目，感谢您的配合。
+            </p>
+            <p className="completion-code-value">{completionCode}</p>
+            <button
+              type="button"
+              className="btn-pill btn-pill-nav completion-code-copy"
+              onClick={() => void handleCopyCompletionId()}
+            >
+              {idCopied ? "已复制" : "复制我的ID"}
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

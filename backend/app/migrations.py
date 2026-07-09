@@ -129,6 +129,53 @@ def run_migrations() -> None:
             )
         if "exit_reason" not in columns:
             conn.execute(text("ALTER TABLE user_sessions ADD COLUMN exit_reason VARCHAR(64)"))
+        if "completion_code" not in columns:
+            conn.execute(text("ALTER TABLE user_sessions ADD COLUMN completion_code VARCHAR(16)"))
+            conn.execute(
+                text(
+                    "UPDATE user_sessions SET completion_code = user_id "
+                    "WHERE completion_code IS NULL AND user_id IS NOT NULL"
+                )
+            )
+
+        columns = _table_columns(inspect(conn), "user_sessions")
+        if "emotion_label" not in columns and "emotion" in columns:
+            conn.execute(text("ALTER TABLE user_sessions RENAME COLUMN emotion TO emotion_label"))
+            columns = _table_columns(inspect(conn), "user_sessions")
+        if "position_label" not in columns and "position" in columns:
+            conn.execute(text("ALTER TABLE user_sessions RENAME COLUMN position TO position_label"))
+            columns = _table_columns(inspect(conn), "user_sessions")
+
+        if "emotion" not in columns:
+            conn.execute(text("ALTER TABLE user_sessions ADD COLUMN emotion INTEGER NOT NULL DEFAULT 0"))
+        if "position" not in columns:
+            conn.execute(text("ALTER TABLE user_sessions ADD COLUMN position INTEGER NOT NULL DEFAULT 0"))
+
+        if "emotion_label" in columns:
+            conn.execute(
+                text(
+                    "UPDATE user_sessions SET emotion = 0 "
+                    "WHERE emotion_label = 'anger' AND (emotion IS NULL OR emotion = 0)"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE user_sessions SET emotion = 1 "
+                    "WHERE emotion_label = 'neutral'"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE user_sessions SET position = 0 "
+                    "WHERE position_label = 'aligned' AND (position IS NULL OR position = 0)"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE user_sessions SET position = 1 "
+                    "WHERE position_label = 'ambiguous'"
+                )
+            )
 
         if dialect == "sqlite":
             if _sqlite_user_id_has_solo_unique(conn):

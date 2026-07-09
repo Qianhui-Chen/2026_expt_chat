@@ -1,179 +1,109 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { api, clearSession, loadSession } from "../api";
-import {
-  INSTRUCTION_PARAGRAPHS,
-  INSTRUCTION_SCREENING_NO,
-  INSTRUCTION_SCREENING_QUESTION,
-  INSTRUCTION_SCREENING_YES,
-  INSTRUCTION_SCREENOUT_MESSAGE,
-  INSTRUCTION_SCREENOUT_TITLE,
-  INSTRUCTION_TITLE,
-} from "../content/instruction";
+import { ensureActiveSession } from "../api";
+import { INSTRUCTION_PARAGRAPHS, INSTRUCTION_TITLE } from "../content/instruction";
 import { useTopBarActions } from "../context/TopBarActionsContext";
 import { trackClick, usePageTracking } from "../hooks/usePageTracking";
 
-type ScreeningChoice = "yes" | "no";
+const INSTRUCTION_COUNTDOWN_SEC = 10;
 
 export default function InstructionPage() {
   const navigate = useNavigate();
   const { setTopBarAction } = useTopBarActions();
-  const [choice, setChoice] = useState<ScreeningChoice | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
-  const [showScreenout, setShowScreenout] = useState(false);
-  const [checkingSession, setCheckingSession] = useState(true);
+  const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [countdown, setCountdown] = useState(INSTRUCTION_COUNTDOWN_SEC);
+  const [navigating, setNavigating] = useState(false);
+  const [sessionReady, setSessionReady] = useState(false);
+  const [bootstrapError, setBootstrapError] = useState("");
   usePageTracking("instruction");
 
   useEffect(() => {
-    const session = loadSession();
-    if (!session) {
-      setCheckingSession(false);
-      return;
-    }
-
-    void api
-      .getSession(session.session_token)
-      .then((data) => {
-        if (data.has_similar_experience === true) {
-          navigate("/chat", { replace: true });
-          return;
-        }
-        if (data.has_similar_experience === false) {
-          clearSession();
-          setShowScreenout(true);
-        }
-      })
-      .catch(() => {
-        // 会话查询失败时仍允许用户继续作答
-      })
-      .finally(() => setCheckingSession(false));
-  }, [navigate]);
-  const handleContinue = useCallback(async () => {
-    if (!choice) return;
-
-    const session = loadSession();
-    if (!session) {
-      navigate("/login", { replace: true });
-      return;
-    }
-
-    setSubmitting(true);
-    setError("");
-    try {
-      const hasExperience = choice === "yes";
-      await trackClick(
-        "instruction",
-        hasExperience ? "has_experience_yes" : "has_experience_no"
-      );
-      const result = await api.submitInstructionScreening(
-        session.session_token,
-        hasExperience
-      );
-
-      if (result.continue_experiment) {
-        await trackClick("instruction", "next");
-        navigate("/chat");
-        return;
-      }
-
-      clearSession();
-      setShowScreenout(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "提交失败");
-    } finally {
-      setSubmitting(false);
-    }
-  }, [choice, navigate]);
+    void ensureActiveSession()
+      .then(() => setSessionReady(true))
+      .catch((err) => {
+        setBootstrapError(err instanceof Error ? err.message : "无法开始实验");
+      });
+  }, []);
 
   useEffect(() => {
-    if (checkingSession || showScreenout) {
+    setCountdown(INSTRUCTION_COUNTDOWN_SEC);
+    countdownTimerRef.current = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          if (countdownTimerRef.current) {
+            clearInterval(countdownTimerRef.current);
+            countdownTimerRef.current = null;
+          }
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => {
+      if (countdownTimerRef.current) {
+        clearInterval(countdownTimerRef.current);
+        countdownTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const handleContinue = useCallback(async () => {
+    if (countdown !== 0 || navigating || !sessionReady) return;
+
+    setNavigating(true);
+    try {
+      await trackClick("instruction", "next");
+      navigate("/chat");
+    } finally {
+      setNavigating(false);
+    }
+  }, [countdown, navigating, sessionReady, navigate]);
+
+  useEffect(() => {
+    if (!sessionReady) {
       setTopBarAction(null);
       return;
     }
 
+    const ready = countdown === 0 && !navigating;
+    const label =
+      navigating ? "跳转中..." : countdown > 0 ? `下一步 (${countdown})` : "下一步";
+
     setTopBarAction(
       <button
         type="button"
-        className="btn-pill btn-pill-nav"
+        className={`btn-pill btn-pill-next-step${ready ? " btn-pill-next-step-ready" : ""}`}
         onClick={() => void handleContinue()}
-        disabled={!choice || submitting}
+        disabled={!ready}
       >
-        {submitting ? "提交中..." : "下一步"}
+        {label}
       </button>
     );
 
     return () => setTopBarAction(null);
-  }, [
-    checkingSession,
-    showScreenout,
-    choice,
-    submitting,
-    handleContinue,
-    setTopBarAction,
-  ]);
+  }, [sessionReady, countdown, navigating, handleContinue, setTopBarAction]);
 
-  const handleDismissScreenout = () => {
-    navigate("/login", { replace: true });
-  };
+  if (!sessionReady && !bootstrapError) {
+    return (
+      <section className="flow-page">
+        <div className="instruction-loading">正在准备实验...</div>
+      </section>
+    );
+  }
 
   return (
-    <>
-      <section className="flow-page">
-        {checkingSession ? (
-          <div className="instruction-loading">加载中...</div>
-        ) : (
-          <>
-        <div className="flow-body instruction-body">
-          <div className="scenario-panel">
-            <h2 className="scenario-title">{INSTRUCTION_TITLE}</h2>
-            {INSTRUCTION_PARAGRAPHS.map((paragraph, index) => (
-              <p key={index}>{paragraph}</p>
-            ))}
-            <fieldset className="screening-fieldset">
-              <legend className="screening-question">{INSTRUCTION_SCREENING_QUESTION}</legend>
-              <div className="screening-options">
-                <label className="screening-option">
-                  <input
-                    type="radio"
-                    name="similar-experience"
-                    value="yes"
-                    checked={choice === "yes"}
-                    onChange={() => setChoice("yes")}
-                  />
-                  <span>{INSTRUCTION_SCREENING_YES}</span>
-                </label>
-                <label className="screening-option">
-                  <input
-                    type="radio"
-                    name="similar-experience"
-                    value="no"
-                    checked={choice === "no"}
-                    onChange={() => setChoice("no")}
-                  />
-                  <span>{INSTRUCTION_SCREENING_NO}</span>
-                </label>
-              </div>
-            </fieldset>
-          </div>
+    <section className="flow-page">
+      <div className="flow-body instruction-body">
+        <div className="scenario-panel">
+          <h2 className="scenario-title">{INSTRUCTION_TITLE}</h2>
+          {INSTRUCTION_PARAGRAPHS.map((paragraph, index) => (
+            <p key={index}>{paragraph}</p>
+          ))}
         </div>
-        {error && <p className="error-text instruction-error">{error}</p>}
-          </>
-        )}
-      </section>
-
-      {showScreenout && (
-        <div className="modal-backdrop">
-          <div className="modal-card completion-card">
-            <h2 className="modal-title">{INSTRUCTION_SCREENOUT_TITLE}</h2>
-            <p className="modal-subtitle">{INSTRUCTION_SCREENOUT_MESSAGE}</p>
-            <button className="btn-pill" onClick={handleDismissScreenout}>
-              返回登录页
-            </button>
-          </div>
-        </div>
-      )}
-    </>
+      </div>
+      {bootstrapError && <p className="error-text instruction-error">{bootstrapError}</p>}
+    </section>
   );
 }
