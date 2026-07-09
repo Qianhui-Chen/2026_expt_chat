@@ -19,11 +19,22 @@ export default function InstructionPage() {
   usePageTracking("instruction");
 
   useEffect(() => {
+    let cancelled = false;
+
     void ensureActiveSession()
-      .then(() => setSessionReady(true))
+      .then(() => {
+        if (cancelled) return;
+        setSessionReady(true);
+        setBootstrapError("");
+      })
       .catch((err) => {
+        if (cancelled) return;
         setBootstrapError(err instanceof Error ? err.message : "无法开始实验");
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
