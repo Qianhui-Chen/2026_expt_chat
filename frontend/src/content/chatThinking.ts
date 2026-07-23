@@ -3,6 +3,8 @@
 export const MIN_THINKING_MS = 6000;
 export const THINKING_ROTATE_MS = 2000;
 export const THINKING_PHRASE_COUNT = 3;
+/** 揭示回复时的打字间隔（接近原 mock 流式节奏） */
+export const TYPEWRITER_CHAR_DELAY_MS = 28;
 
 export const TOOL_THINKING_PHRASES = [
   "思考中",

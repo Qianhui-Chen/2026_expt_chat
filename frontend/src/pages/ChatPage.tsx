@@ -3,6 +3,7 @@ import { api, loadSession, saveSession } from "../api";
 import {
   MIN_THINKING_MS,
   THINKING_ROTATE_MS,
+  TYPEWRITER_CHAR_DELAY_MS,
   pickThinkingPhrases,
   sleep,
 } from "../content/chatThinking";
@@ -366,7 +367,6 @@ export default function ChatPage() {
     const streamingAiKey = `a-stream-${Date.now()}`;
     const thinkingPhrases = pickThinkingPhrases(session.bot_type);
     const waitStartedAt = Date.now();
-    let canReveal = false;
     let tokenBuffer = "";
     let phraseIndex = 0;
 
@@ -379,10 +379,16 @@ export default function ChatPage() {
       );
     };
 
-    const flushBufferedTokens = () => {
-      if (!tokenBuffer) return;
-      const buffered = tokenBuffer;
-      tokenBuffer = "";
+    const rotationTimer = window.setInterval(() => {
+      phraseIndex = Math.min(phraseIndex + 1, thinkingPhrases.length - 1);
+      updateThinkingLabel(thinkingPhrases[phraseIndex]);
+    }, THINKING_ROTATE_MS);
+
+    const cleanupThinking = () => {
+      window.clearInterval(rotationTimer);
+    };
+
+    const typewriterReveal = async (fullText: string) => {
       let shouldTriggerAngerAnimate = false;
       setMessages((prev) => {
         const streaming = prev.find((item) => item.key === streamingAiKey);
@@ -393,7 +399,7 @@ export default function ChatPage() {
                 ...item,
                 isThinking: false,
                 isStreaming: true,
-                content: item.content + buffered,
+                content: "",
               }
             : item
         );
@@ -401,34 +407,21 @@ export default function ChatPage() {
       if (shouldTriggerAngerAnimate) {
         setLatestAnimatedKey(streamingAiKey);
       }
-    };
 
-    const rotationTimer = window.setInterval(() => {
-      phraseIndex = Math.min(phraseIndex + 1, thinkingPhrases.length - 1);
-      updateThinkingLabel(thinkingPhrases[phraseIndex]);
-    }, THINKING_ROTATE_MS);
-
-    const minWaitTimer = window.setTimeout(() => {
-      canReveal = true;
-      window.clearInterval(rotationTimer);
-      flushBufferedTokens();
-    }, MIN_THINKING_MS);
-
-    const cleanupThinking = () => {
-      window.clearInterval(rotationTimer);
-      window.clearTimeout(minWaitTimer);
-      setThinkingStatus("");
-    };
-
-    const ensureMinThinking = async () => {
-      const remaining = MIN_THINKING_MS - (Date.now() - waitStartedAt);
-      if (remaining > 0) {
-        await sleep(remaining);
-      }
-      if (!canReveal) {
-        canReveal = true;
-        window.clearInterval(rotationTimer);
-        flushBufferedTokens();
+      for (const char of fullText) {
+        setMessages((prev) =>
+          prev.map((item) =>
+            item.key === streamingAiKey
+              ? {
+                  ...item,
+                  isThinking: false,
+                  isStreaming: true,
+                  content: item.content + char,
+                }
+              : item
+          )
+        );
+        await sleep(TYPEWRITER_CHAR_DELAY_MS);
       }
     };
 
@@ -489,32 +482,29 @@ export default function ChatPage() {
           );
         },
         onToken: (delta) => {
-          if (!canReveal) {
-            tokenBuffer += delta;
-            return;
-          }
-          let shouldTriggerAngerAnimate = false;
-          setMessages((prev) => {
-            const streaming = prev.find((item) => item.key === streamingAiKey);
-            shouldTriggerAngerAnimate = Boolean(streaming?.isThinking && isAnger);
-            return prev.map((item) =>
-              item.key === streamingAiKey
-                ? {
-                    ...item,
-                    isThinking: false,
-                    isStreaming: true,
-                    content: item.content + delta,
-                  }
-                : item
-            );
-          });
-          if (shouldTriggerAngerAnimate) {
-            setLatestAnimatedKey(streamingAiKey);
-          }
+          // 最短等待期间先攒全文，揭示时再逐字打出，避免整段弹出
+          tokenBuffer += delta;
         },
         onDone: async (payload) => {
-          await ensureMinThinking();
+          const remaining = MIN_THINKING_MS - (Date.now() - waitStartedAt);
+          if (remaining > 0) {
+            await sleep(remaining);
+          }
           cleanupThinking();
+
+          const fullText = payload.ai_message?.content ?? tokenBuffer;
+          if (!fullText) {
+            setThinkingStatus("");
+            setMessages((prev) => prev.filter((item) => item.key !== streamingAiKey));
+            setAiRoundCount(payload.ai_round_count);
+            setIsAnger(payload.is_anger);
+            setChatFinished(payload.chat_finished);
+            return;
+          }
+
+          setThinkingStatus("输出中");
+          await typewriterReveal(fullText);
+          setThinkingStatus("");
 
           setAiRoundCount(payload.ai_round_count);
           setIsAnger(payload.is_anger);
@@ -542,17 +532,25 @@ export default function ChatPage() {
               setLatestAnimatedKey(finalKey);
             }
           } else {
-            setMessages((prev) => prev.filter((item) => item.key !== streamingAiKey));
+            setMessages((prev) =>
+              prev.map((item) =>
+                item.key === streamingAiKey
+                  ? { ...item, isThinking: false, isStreaming: false }
+                  : item
+              )
+            );
           }
         },
         onError: (message) => {
           cleanupThinking();
+          setThinkingStatus("");
           setError(message);
           setMessages((prev) => prev.filter((item) => item.key !== streamingAiKey));
         },
       });
     } catch (err) {
       cleanupThinking();
+      setThinkingStatus("");
       setError(err instanceof Error ? err.message : "发送失败");
       setMessages((prev) =>
         prev.filter((item) => item.key !== optimisticUserKey && item.key !== streamingAiKey)
