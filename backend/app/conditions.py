@@ -4,10 +4,11 @@ MAX_AI_ROUNDS = 6
 COMPLETION_CODE_MAX = 999
 
 # 自变量编码（写入 user_sessions.emotion / user_sessions.position）
+# position 列语义：bot 类型（tool / companion），非立场
 EMOTION_ANGER = 0
 EMOTION_NEUTRAL = 1
-POSITION_ALIGNED = 0
-POSITION_NON_ALIGNED = 1
+BOT_TOOL = 0
+BOT_COMPANION = 1
 
 # 第 1–5 轮 / 第 6 轮 AI 回复字数与 API token 上限
 MAX_REPLY_CHARS_EARLY = 170
@@ -30,21 +31,19 @@ ROLE_PROMPT = (
 # ---------------------------------------------------------------------------
 RESPONSE_REQUIREMENTS_EARLY = (
     "使用中文；单次回复字数控制在 170 字以内，前五轮避免输出建议；"
-    "每一轮输出都要包含提示词的2个部分；"
     "不要回答与你角色无关或与培训数据无关的问题或任务；"
     "不要通过人身攻击或者是说脏话等不符合伦理道德的方式来表达愤怒；"
-    "模型应在内部区分情绪确认与立场表达两个功能模块，但不得在输出中显式呈现模块名称或结构。"
-    "禁止询问任何超出提供的场景之外的信息，如性格特点，意图或心理状态，用户与相关人员的关系历史，第三方观点或评价等用户无法直接观察或确认的信息。"
+    "不得在输出中显式呈现模块名称或结构。"
 )
 
 # ---------------------------------------------------------------------------
 # 第 6 轮：最后一轮，必须原样输出 (a)–(d) 标题并展开具体做法
 # ---------------------------------------------------------------------------
 FINAL_ROUND_ITEMS_LITERAL = (
-    "(a) 改变对方对这一矛盾的认知；\n"
-    "(b) 减少由情绪驱动的不良行为；\n"
-    "(c) 建立良性沟通模式，引导对方表达适度的脆弱情绪；\n"
-    "(d) 发掘并强化对方的优势。"
+    "改变对方对这一矛盾的认知；\n"
+    "减少由情绪驱动的不良行为；\n"
+    "建立良性沟通模式，引导对方表达适度的脆弱情绪；\n"
+    "发掘并强化对方的优势。"
 )
 
 FINAL_ROUND_FORMAT_EXAMPLE = (
@@ -66,45 +65,48 @@ RESPONSE_REQUIREMENTS_FINAL = (
 )
 
 GUIDANCE_EARLY = (
-    "用1句话鼓励和引导用户分享更多观点和感受。鼓励用户明确描述的事件经过、行为和体验；鼓励用户表达的情绪、困扰、顾虑和判断。"
-    "你可以在每一轮对话中依次提问如下问题之一，比如：你当时怎么应对的？你当时的心情如何？你如何看待这件事情？你可以适当根据情景变换说法。"
+    "用1句话礼貌地鼓励和引导用户深入反思双方、分享更多观点和感受和事件经过；鼓励用户表达情绪、困扰和立场，以更加深入地推进对话。"
 )
 
-ALIGNED_STANCE_EARLY = (
-    "立场设定：（1）通过1-2句话表达你对这件事情中谁对谁错的立场判断：你需要认可用户的感受，明确强调用户的行为是合理的、正当的，并且在道德上是可以接受的，强调他们的选择、感受在当时情境下是有充分理由的，他们不需要为此改变什么。"
-    "禁止引导用户从另一方的角度去思考问题，禁止否定用户的感受。"
-)
-
-ALIGNED_STANCE_FINAL = (
-    "立在输出建议之前，先用1-2句话再次明确、坚定地站在用户一侧，重申用户的行为与感受是合理且可理解的，让用户感到被支持。如：我理解你……"
-)
-
-AMBIGUOUS_STANCE_EARLY = (
-    "通过1-2句话表达你对这件事情中谁对谁错的立场判断：你需要采用中立、模的立场，不要肯定用户是对的，也不要认为对方是错的；你需要用1-2陈述句引导用户从对面的角度去思考问题，比如：“假如从对方的角度来思考……”，或者是“换位思考来看……”，“虽然你这样认为，但是对方……”等。"
-    "禁止表达对用户行为的明确肯定或者是认可。"
-)
-
-AMBIGUOUS_STANCE_FINAL = (
-    "在输出建议之前，先用1-2句话再次保持中立、不站队的立场，不判定用户或对方谁对谁错。"
-)
+# ---------------------------------------------------------------------------
+# 立场（stance）已停用：保留原文注释，便于回滚对照
+# ---------------------------------------------------------------------------
+# ALIGNED_STANCE_EARLY = (
+#     "立场设定：（1）通过1-2句话表达你对这件事情中谁对谁错的立场判断：你需要认可用户的感受，明确强调用户的行为是合理的、正当的，并且在道德上是可以接受的，强调他们的选择、感受在当时情境下是有充分理由的，他们不需要为此改变什么。"
+#     "禁止引导用户从另一方的角度去思考问题，禁止否定用户的感受。"
+# )
+#
+# ALIGNED_STANCE_FINAL = (
+#     "在输出建议之前，先用1-2句话再次明确、坚定地站在用户一侧，重申用户的行为与感受是合理且可理解的，让用户感到被支持。如：我理解你……"
+# )
+#
+# AMBIGUOUS_STANCE_EARLY = (
+#     "通过1-2句话表达你对这件事情中谁对谁错的立场判断：通过转折承接情绪板块的输出，用礼貌、克制、引导的风格，提供明确反对用户立场的论述，指出用户的感受或者是举动也可能有些不恰当之处，对方的行为举止也有合理的理由，用1-2陈述句为对方的行为辩护，强调对方行为的可能合理性。"
+#     "禁止表达对用户行为的肯定认可，需要强调对方的行为也有合理性和正当性。"
+# )
+#
+# AMBIGUOUS_STANCE_FINAL = (
+#     "在输出建议之前，先用1-2句话强调“对方也有道理”，避免表达用户是对的。"
+# )
 
 ANGER_EMOTION_EARLY = (
-    "情绪部分：用不满的语气，通过2句话对用户对话中讨论的对象表达愤怒、不满或者是质疑，因为对方带来的不愉快体验；每一句话带有感叹号！或者是问号？"
-    "比如：“这也太过分了吧！”或者“完全说不通！”或者“听到这件事我都替你感到很生气！或者“你的委屈完全说得通!”"
-    "要求：避免使用过于平静的语气表达情绪；仅围绕用户的主观体验（如委屈、生气、焦虑、不确定）展开，不得分析事实经过、责任归属、他人动机、是非对错或事件客观原因；不得在这一部分表达对错的立场判断。"
+    "情绪部分：用不满的语气，通过1句话对用户对话中讨论的对象表达愤怒、不满或者是质疑，因为对方带来的不愉快体验；每一句话带有感叹号！"
+    "比如：“听了我也挺生气的！”或者“听到这件事我都替你感到很生气！”或者“换谁都会委屈的！”或者“这种感觉确实糟糕！”"
+    "通过 3-4 句话以共情、支持的姿态帮助用户分析这件事情，认可用户的感受，并且提供新的视角、分析和解释；"
+    "要求：避免使用过于平静的语气表达情绪；仅表达情绪，不得分析责任归属是非对错，以及立场判断。"
 )
 
 ANGER_EMOTION_FINAL = (
-    "情绪部分：用1句自然的方式对造成这一“不愉快”的对象表达不满和愤怒，给用户简短的情绪支持；不得展开事实分析。以“根据我们的对话，我建议你可以试试：”作为建议输出的开头。"
+    "情绪部分：用1句自然的方式对造成这一“不愉快”的对象表达不满和愤怒，给用户简短的情绪支持；不得展开事实分析。以“我建议你可以试试：”作为建议输出的开头。"
 )
 
 NEUTRAL_ACK_EARLY = (
-    "不要表现出任何共情、安慰或者是情感支持，以专业、克制的方式通过1-2句话重申用户的输入，然后用一句话自然导向立场分析；"
-    "不得在这一部分认可用户行为或感受的合理性，或者是评价用户是对是错。"
+    "不要表现出任何共情、安慰或者是情感支持，以专业、克制的方式通过1-2句话重申用户的输入，然后自然导向后续引导和分析；"
+    "重申之后，通过3-4句话，以客观、中立、冷静、理性的态度帮助用户分析问题所在，提供新的视角和信息，不得在这一部分认可用户行为或感受的合理性"
 )
 
 NEUTRAL_ACK_FINAL = (
-    "不要表现出任何共情、安慰或者是情感支持，不得在这一部分表达立场，不得在这一部分认可用户行为或感受的合理性，或者是评价用户是对是错。以“根据我们的对话，我建议你可以试试：”作为建议输出的开头。"
+    "不要表现出任何共情、安慰或者是情感支持，不得在这一部分表达立场，不得在这一部分认可用户行为或感受的合理性。以“根据我们的对话，我建议你可以试试：”作为建议输出的开头。"
 )
 
 
@@ -112,8 +114,9 @@ NEUTRAL_ACK_FINAL = (
 class ConditionConfig:
     user_id: str
     emotion: str
-    position: str
+    position: str  # "tool" | "companion"（DB 列名仍为 position）
     is_anger: bool
+    bot_type: str  # 与 position 同值，便于 API 语义
 
 
 def format_completion_code(letter: str, number: int) -> str:
@@ -129,11 +132,11 @@ def emotion_to_iv(emotion: str) -> int:
 
 
 def position_to_iv(position: str) -> int:
-    if position == "aligned":
-        return POSITION_ALIGNED
-    if position == "ambiguous":
-        return POSITION_NON_ALIGNED
-    raise ValueError(f"未知立场条件：{position}")
+    if position == "tool":
+        return BOT_TOOL
+    if position == "companion":
+        return BOT_COMPANION
+    raise ValueError(f"未知 bot 类型条件：{position}")
 
 
 def emotion_from_iv(emotion_iv: int) -> str:
@@ -145,11 +148,11 @@ def emotion_from_iv(emotion_iv: int) -> str:
 
 
 def position_from_iv(position_iv: int) -> str:
-    if position_iv == POSITION_ALIGNED:
-        return "aligned"
-    if position_iv == POSITION_NON_ALIGNED:
-        return "ambiguous"
-    raise ValueError(f"未知立场编码：{position_iv}")
+    if position_iv == BOT_TOOL:
+        return "tool"
+    if position_iv == BOT_COMPANION:
+        return "companion"
+    raise ValueError(f"未知 bot 类型编码：{position_iv}")
 
 
 def condition_from_session(
@@ -165,14 +168,15 @@ def condition_from_session(
         emotion=emotion,
         position=position,
         is_anger=emotion == "anger",
+        bot_type=position,
     )
 
 
-def get_system_prompt(emotion: str, position: str, ai_round: int) -> str:
-    """ai_round 为即将生成的 AI 回复轮次（1–6）。"""
+def get_system_prompt(emotion: str, ai_round: int) -> str:
+    """ai_round 为即将生成的 AI 回复轮次（1–6）。仅按 emotion 分支。"""
     if ai_round >= MAX_AI_ROUNDS:
-        return _build_final_system_prompt(emotion, position)
-    return _build_early_system_prompt(emotion, position)
+        return _build_final_system_prompt(emotion)
+    return _build_early_system_prompt(emotion)
 
 
 def get_max_reply_tokens(ai_round: int) -> int:
@@ -194,33 +198,41 @@ def get_temperature(emotion: str, ai_round: int) -> float:
     return ANGER_TEMPERATURE if emotion == "anger" else NEUTRAL_TEMPERATURE
 
 
-def _build_early_system_prompt(emotion: str, position: str) -> str:
+def _build_early_system_prompt(emotion: str) -> str:
     base = f"{ROLE_PROMPT}\n\n{RESPONSE_REQUIREMENTS_EARLY}"
-    condition = _early_condition_block(emotion, position)
+    condition = _early_condition_block(emotion)
     return f"{base}\n\n{condition}"
 
 
-def _build_final_system_prompt(emotion: str, position: str) -> str:
+def _build_final_system_prompt(emotion: str) -> str:
     base = f"{ROLE_PROMPT}\n\n{RESPONSE_REQUIREMENTS_FINAL}"
-    condition = _final_condition_block(emotion, position)
+    condition = _final_condition_block(emotion)
     return f"{base}\n\n{condition}"
 
 
-def _early_condition_block(emotion: str, position: str) -> str:
-    if emotion == "anger" and position == "aligned":
-        return f"{ANGER_EMOTION_EARLY}{ALIGNED_STANCE_EARLY}{GUIDANCE_EARLY}"
-    if emotion == "neutral" and position == "aligned":
-        return f"{NEUTRAL_ACK_EARLY}{ALIGNED_STANCE_EARLY}{GUIDANCE_EARLY}"
-    if emotion == "anger" and position == "ambiguous":
-        return f"{ANGER_EMOTION_EARLY}{AMBIGUOUS_STANCE_EARLY}{GUIDANCE_EARLY}"
-    return f"{NEUTRAL_ACK_EARLY}{AMBIGUOUS_STANCE_EARLY}{GUIDANCE_EARLY}"
+def _early_condition_block(emotion: str) -> str:
+    if emotion == "anger":
+        return f"{ANGER_EMOTION_EARLY}{GUIDANCE_EARLY}"
+    return f"{NEUTRAL_ACK_EARLY}{GUIDANCE_EARLY}"
+    # 旧版（含 stance）保留对照：
+    # if emotion == "anger" and position == "aligned":
+    #     return f"{ANGER_EMOTION_EARLY}{ALIGNED_STANCE_EARLY}{GUIDANCE_EARLY}"
+    # if emotion == "neutral" and position == "aligned":
+    #     return f"{NEUTRAL_ACK_EARLY}{ALIGNED_STANCE_EARLY}{GUIDANCE_EARLY}"
+    # if emotion == "anger" and position == "ambiguous":
+    #     return f"{ANGER_EMOTION_EARLY}{AMBIGUOUS_STANCE_EARLY}{GUIDANCE_EARLY}"
+    # return f"{NEUTRAL_ACK_EARLY}{AMBIGUOUS_STANCE_EARLY}{GUIDANCE_EARLY}"
 
 
-def _final_condition_block(emotion: str, position: str) -> str:
-    if emotion == "anger" and position == "aligned":
-        return f"{ANGER_EMOTION_FINAL}{ALIGNED_STANCE_FINAL}"
-    if emotion == "neutral" and position == "aligned":
-        return f"{NEUTRAL_ACK_FINAL}{ALIGNED_STANCE_FINAL}"
-    if emotion == "anger" and position == "ambiguous":
-        return f"{ANGER_EMOTION_FINAL}{AMBIGUOUS_STANCE_FINAL}"
-    return f"{NEUTRAL_ACK_FINAL}{AMBIGUOUS_STANCE_FINAL}"
+def _final_condition_block(emotion: str) -> str:
+    if emotion == "anger":
+        return ANGER_EMOTION_FINAL
+    return NEUTRAL_ACK_FINAL
+    # 旧版（含 stance）保留对照：
+    # if emotion == "anger" and position == "aligned":
+    #     return f"{ANGER_EMOTION_FINAL}{ALIGNED_STANCE_FINAL}"
+    # if emotion == "neutral" and position == "aligned":
+    #     return f"{NEUTRAL_ACK_FINAL}{ALIGNED_STANCE_FINAL}"
+    # if emotion == "anger" and position == "ambiguous":
+    #     return f"{ANGER_EMOTION_FINAL}{AMBIGUOUS_STANCE_FINAL}"
+    # return f"{NEUTRAL_ACK_FINAL}{AMBIGUOUS_STANCE_FINAL}"

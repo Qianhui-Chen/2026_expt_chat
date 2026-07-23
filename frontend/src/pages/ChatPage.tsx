@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, loadSession, saveSession } from "../api";
+import {
+  MIN_THINKING_MS,
+  THINKING_ROTATE_MS,
+  pickThinkingPhrases,
+  sleep,
+} from "../content/chatThinking";
 import { useTopBarActions } from "../context/TopBarActionsContext";
 import { trackClick, usePageTracking } from "../hooks/usePageTracking";
 import { MAX_ANGER_METER, getAngerMeterLevel, getPendingAngerMeterLevel } from "../utils/angerMeter";
@@ -11,6 +17,8 @@ interface MessageBubbleProps {
   isAnger: boolean;
   animate?: boolean;
   isThinking?: boolean;
+  thinkingLabel?: string;
+  thinkingVariant?: "tool" | "companion";
   isStreaming?: boolean;
   angerLevel?: number;
   maxAngerMeter?: number;
@@ -22,6 +30,8 @@ function MessageBubble({
   isAnger,
   animate = false,
   isThinking = false,
+  thinkingLabel = "思考中",
+  thinkingVariant = "tool",
   isStreaming = false,
   angerLevel = 0,
   maxAngerMeter = MAX_ANGER_METER,
@@ -57,14 +67,16 @@ function MessageBubble({
         </>
       )}
       {isThinking ? (
-        <p className="thinking-text" aria-live="polite">
-          AI 正在思考
-          <span className="thinking-dots" aria-hidden="true">
-            <span>.</span>
-            <span>.</span>
-            <span>.</span>
-          </span>
-        </p>
+        <div className={`thinking-chip thinking-chip--${thinkingVariant}`}>
+          <p className="thinking-text" aria-live="polite">
+            {thinkingLabel}
+            <span className="thinking-dots" aria-hidden="true">
+              <span>.</span>
+              <span>.</span>
+              <span>.</span>
+            </span>
+          </p>
+        </div>
       ) : (
         <p>
           {content}
@@ -127,10 +139,12 @@ type ChatMessageItem = {
   round_number: number | null;
   key: string;
   isThinking?: boolean;
+  thinkingLabel?: string;
   isStreaming?: boolean;
 };
 
-const INTRO_PROMPT = "请用不多于 80 个字描述你经历的事件内容、感受和情绪，并与AI进行分析和讨论；AI会基于你的经历给出对应建议。";
+const INTRO_PROMPT =
+  "请用不多于 80 个字描述你经历的事件经过和情绪，并与AI进行分析和讨论；AI会基于你的经历给出对应建议。";
 const MAX_INTRO_LENGTH = 80;
 const NEXT_STEP_COUNTDOWN_SEC = 8;
 
@@ -171,6 +185,7 @@ export default function ChatPage() {
   const [nextStepSubmitting, setNextStepSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [thinkingStatus, setThinkingStatus] = useState("");
   const [latestAnimatedKey, setLatestAnimatedKey] = useState<string | null>(null);
   const [error, setError] = useState("");
   usePageTracking("chat");
@@ -259,11 +274,14 @@ export default function ChatPage() {
         : nextStepCountdown > 0
           ? `下一步 (${nextStepCountdown})`
           : "下一步";
+    const session = loadSession();
+    const toneClass =
+      session?.bot_type === "companion" ? "meet-next-btn--companion" : "meet-next-btn--tool";
 
     setTopBarAction(
       <button
         type="button"
-        className={`btn-pill btn-pill-next-step${ready ? " btn-pill-next-step-ready" : ""}`}
+        className={`btn-pill meet-next-btn ${toneClass}${ready ? " meet-next-btn--ready" : ""}`}
         onClick={() => void handleNextStep()}
         disabled={!ready}
       >
@@ -346,10 +364,78 @@ export default function ChatPage() {
 
     const optimisticUserKey = `u-pending-${Date.now()}`;
     const streamingAiKey = `a-stream-${Date.now()}`;
+    const thinkingPhrases = pickThinkingPhrases(session.bot_type);
+    const waitStartedAt = Date.now();
+    let canReveal = false;
+    let tokenBuffer = "";
+    let phraseIndex = 0;
+
+    const updateThinkingLabel = (label: string) => {
+      setThinkingStatus(label);
+      setMessages((prev) =>
+        prev.map((item) =>
+          item.key === streamingAiKey ? { ...item, thinkingLabel: label, isThinking: true } : item
+        )
+      );
+    };
+
+    const flushBufferedTokens = () => {
+      if (!tokenBuffer) return;
+      const buffered = tokenBuffer;
+      tokenBuffer = "";
+      let shouldTriggerAngerAnimate = false;
+      setMessages((prev) => {
+        const streaming = prev.find((item) => item.key === streamingAiKey);
+        shouldTriggerAngerAnimate = Boolean(streaming?.isThinking && isAnger);
+        return prev.map((item) =>
+          item.key === streamingAiKey
+            ? {
+                ...item,
+                isThinking: false,
+                isStreaming: true,
+                content: item.content + buffered,
+              }
+            : item
+        );
+      });
+      if (shouldTriggerAngerAnimate) {
+        setLatestAnimatedKey(streamingAiKey);
+      }
+    };
+
+    const rotationTimer = window.setInterval(() => {
+      phraseIndex = Math.min(phraseIndex + 1, thinkingPhrases.length - 1);
+      updateThinkingLabel(thinkingPhrases[phraseIndex]);
+    }, THINKING_ROTATE_MS);
+
+    const minWaitTimer = window.setTimeout(() => {
+      canReveal = true;
+      window.clearInterval(rotationTimer);
+      flushBufferedTokens();
+    }, MIN_THINKING_MS);
+
+    const cleanupThinking = () => {
+      window.clearInterval(rotationTimer);
+      window.clearTimeout(minWaitTimer);
+      setThinkingStatus("");
+    };
+
+    const ensureMinThinking = async () => {
+      const remaining = MIN_THINKING_MS - (Date.now() - waitStartedAt);
+      if (remaining > 0) {
+        await sleep(remaining);
+      }
+      if (!canReveal) {
+        canReveal = true;
+        window.clearInterval(rotationTimer);
+        flushBufferedTokens();
+      }
+    };
 
     setSending(true);
     setError("");
     setInput("");
+    setThinkingStatus(thinkingPhrases[0]);
     autoResizeTextarea(textareaRef.current);
 
     setMessages((prev) => [
@@ -366,6 +452,7 @@ export default function ChatPage() {
         round_number: null,
         key: streamingAiKey,
         isThinking: true,
+        thinkingLabel: thinkingPhrases[0],
         isStreaming: false,
       },
     ]);
@@ -390,12 +477,22 @@ export default function ChatPage() {
           setMessages((prev) =>
             prev.map((item) =>
               item.key === streamingAiKey
-                ? { ...item, isThinking: true, isStreaming: false, content: "" }
+                ? {
+                    ...item,
+                    isThinking: true,
+                    isStreaming: false,
+                    content: "",
+                    thinkingLabel: thinkingPhrases[phraseIndex],
+                  }
                 : item
             )
           );
         },
         onToken: (delta) => {
+          if (!canReveal) {
+            tokenBuffer += delta;
+            return;
+          }
           let shouldTriggerAngerAnimate = false;
           setMessages((prev) => {
             const streaming = prev.find((item) => item.key === streamingAiKey);
@@ -415,7 +512,10 @@ export default function ChatPage() {
             setLatestAnimatedKey(streamingAiKey);
           }
         },
-        onDone: (payload) => {
+        onDone: async (payload) => {
+          await ensureMinThinking();
+          cleanupThinking();
+
           setAiRoundCount(payload.ai_round_count);
           setIsAnger(payload.is_anger);
           setChatFinished(payload.chat_finished);
@@ -444,14 +544,15 @@ export default function ChatPage() {
           } else {
             setMessages((prev) => prev.filter((item) => item.key !== streamingAiKey));
           }
-
         },
         onError: (message) => {
+          cleanupThinking();
           setError(message);
           setMessages((prev) => prev.filter((item) => item.key !== streamingAiKey));
         },
       });
     } catch (err) {
+      cleanupThinking();
       setError(err instanceof Error ? err.message : "发送失败");
       setMessages((prev) =>
         prev.filter((item) => item.key !== optimisticUserKey && item.key !== streamingAiKey)
@@ -516,6 +617,8 @@ export default function ChatPage() {
   }
 
   const sessionToken = loadSession()?.session_token ?? 0;
+  const thinkingVariant =
+    loadSession()?.bot_type === "companion" ? "companion" : "tool";
 
   const getAngerLevel = (message: ChatMessageItem) => {
     if (!isAnger || message.role !== "assistant" || !sessionToken) return 0;
@@ -544,6 +647,8 @@ export default function ChatPage() {
               isAnger={isAnger}
               animate={message.key === latestAnimatedKey}
               isThinking={message.isThinking}
+              thinkingLabel={message.thinkingLabel}
+              thinkingVariant={thinkingVariant}
               isStreaming={message.isStreaming}
               angerLevel={getAngerLevel(message)}
               maxAngerMeter={MAX_ANGER_METER}
@@ -580,7 +685,11 @@ export default function ChatPage() {
             </button>
           </div>
           <p className="chat-progress" aria-live="polite">
-            {sending ? "AI 正在思考…" : `AI 回复进度：${aiRoundCount}/${maxRounds}`}
+            {sending
+              ? thinkingStatus
+                ? `${thinkingStatus}…`
+                : "AI 正在思考…"
+              : `AI 回复进度：${aiRoundCount}/${maxRounds}`}
           </p>
         </div>
       </section>

@@ -7,6 +7,7 @@ class StartSessionResponse(BaseModel):
     session_token: int
     attempt_number: int
     is_anger: bool
+    bot_type: str
     completion_code: str
 
 
@@ -67,6 +68,7 @@ class ChatSendResponse(BaseModel):
 class SessionResponse(BaseModel):
     attempt_number: int
     is_anger: bool
+    bot_type: str
     ai_round_count: int
     chat_finished: bool
     experiment_finished: bool

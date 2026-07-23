@@ -12,12 +12,16 @@ export function usePageTracking(pageName: string) {
     if (!session) return;
 
     return () => {
-      void api.logPageLeave(
-        session.session_token,
-        pageName,
-        enteredAtRef.current,
-        new Date().toISOString()
-      );
+      void api
+        .logPageLeave(
+          session.session_token,
+          pageName,
+          enteredAtRef.current,
+          new Date().toISOString()
+        )
+        .catch(() => {
+          /* 埋点失败不打断实验流程 */
+        });
     };
   }, [location.pathname, pageName]);
 }
@@ -25,5 +29,9 @@ export function usePageTracking(pageName: string) {
 export async function trackClick(page: string, element: string) {
   const session = loadSession();
   if (!session) return;
-  await api.logClick(session.session_token, page, element);
+  try {
+    await api.logClick(session.session_token, page, element);
+  } catch {
+    /* 埋点失败不打断实验流程 */
+  }
 }

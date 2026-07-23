@@ -40,10 +40,10 @@ MOCK_STREAM_CHAR_DELAY_SEC = 0.025
 _COMPLETION_CODE_RE = re.compile(r"^[AB]\d{3}$")
 
 _CONDITION_GROUPS: tuple[tuple[str, str, str, bool], ...] = (
-    ("anger", "aligned", "A", True),
-    ("anger", "ambiguous", "A", False),
-    ("neutral", "aligned", "B", True),
-    ("neutral", "ambiguous", "B", False),
+    ("anger", "tool", "A", True),
+    ("anger", "companion", "A", False),
+    ("neutral", "tool", "B", True),
+    ("neutral", "companion", "B", False),
 )
 
 
@@ -127,7 +127,8 @@ def resolve_completion_code(db: Session, session: UserSession) -> str:
             return candidate
 
     letter = "A" if session.emotion_label == "anger" else "B"
-    want_odd = session.position_label == "aligned"
+    # tool / 旧 aligned = 奇数；companion / 旧 ambiguous = 偶数
+    want_odd = session.position_label in {"tool", "aligned"}
     used = _used_numbers_for_letter_parity(db, letter, want_odd)
     number = _next_code_number(want_odd, used)
     code = format_completion_code(letter, number)
@@ -277,7 +278,7 @@ def send_user_message(db: Session, session: UserSession, message: str) -> tuple[
 def _build_chat_messages(db: Session, session: UserSession) -> list[dict[str, str]]:
     history = list_chat_messages(db, session)
     next_round = session.ai_round_count + 1
-    system_prompt = get_system_prompt(session.emotion_label, session.position_label, next_round)
+    system_prompt = get_system_prompt(session.emotion_label, next_round)
     messages = [{"role": "system", "content": system_prompt}]
     for item in history:
         if item.role in {"user", "assistant"}:

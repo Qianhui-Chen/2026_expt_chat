@@ -48,6 +48,7 @@ def start_session(db: Session = Depends(get_db)):
         session_token=session.id,
         attempt_number=session.attempt_number,
         is_anger=condition.is_anger,
+        bot_type=condition.bot_type,
         completion_code=resolve_completion_code(db, session),
     )
 
@@ -65,6 +66,7 @@ def get_session(session_token: int, db: Session = Depends(get_db)):
     return SessionResponse(
         attempt_number=session.attempt_number,
         is_anger=condition.is_anger,
+        bot_type=condition.bot_type,
         ai_round_count=session.ai_round_count,
         chat_finished=bool(session.chat_finished),
         experiment_finished=bool(session.experiment_finished),

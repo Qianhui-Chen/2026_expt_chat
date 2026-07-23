@@ -1,20 +1,26 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { ensureActiveSession } from "../api";
-import { INSTRUCTION_PARAGRAPHS, INSTRUCTION_TITLE } from "../content/instruction";
-import { useTopBarActions } from "../context/TopBarActionsContext";
+import { ensureActiveSession, loadSession, type SessionState } from "../api";
+import { INSTRUCTION_COPY, INSTRUCTION_CTA_LABEL } from "../content/instruction";
+import { splitBoldSegments } from "../content/meet";
 import { trackClick, usePageTracking } from "../hooks/usePageTracking";
 
-const INSTRUCTION_COUNTDOWN_SEC = 10;
+const INSTRUCTION_COUNTDOWN_SEC = 5;
+
+function RichParagraph({ text }: { text: string }) {
+  const nodes: ReactNode[] = splitBoldSegments(text).map((segment, index) =>
+    segment.bold ? <strong key={index}>{segment.text}</strong> : <span key={index}>{segment.text}</span>
+  );
+  return <p>{nodes}</p>;
+}
 
 export default function InstructionPage() {
   const navigate = useNavigate();
-  const { setTopBarAction } = useTopBarActions();
   const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [countdown, setCountdown] = useState(INSTRUCTION_COUNTDOWN_SEC);
   const [navigating, setNavigating] = useState(false);
-  const [sessionReady, setSessionReady] = useState(false);
+  const [session, setSession] = useState<SessionState | null>(() => loadSession());
   const [bootstrapError, setBootstrapError] = useState("");
   usePageTracking("instruction");
 
@@ -22,13 +28,19 @@ export default function InstructionPage() {
     let cancelled = false;
 
     void ensureActiveSession()
-      .then(() => {
+      .then((active) => {
         if (cancelled) return;
-        setSessionReady(true);
+        setSession(active);
         setBootstrapError("");
       })
       .catch((err) => {
         if (cancelled) return;
+        const local = loadSession();
+        if (local) {
+          setSession(local);
+          setBootstrapError("");
+          return;
+        }
         setBootstrapError(err instanceof Error ? err.message : "无法开始实验");
       });
 
@@ -38,6 +50,8 @@ export default function InstructionPage() {
   }, []);
 
   useEffect(() => {
+    if (!session) return;
+
     setCountdown(INSTRUCTION_COUNTDOWN_SEC);
     countdownTimerRef.current = setInterval(() => {
       setCountdown((prev) => {
@@ -58,63 +72,59 @@ export default function InstructionPage() {
         countdownTimerRef.current = null;
       }
     };
-  }, []);
+  }, [session]);
 
   const handleContinue = useCallback(async () => {
-    if (countdown !== 0 || navigating || !sessionReady) return;
+    if (!session || countdown !== 0 || navigating) return;
 
     setNavigating(true);
     try {
-      await trackClick("instruction", "next");
-      navigate("/chat");
+      await trackClick("instruction", "meet-intro");
+      navigate("/meet");
     } finally {
       setNavigating(false);
     }
-  }, [countdown, navigating, sessionReady, navigate]);
+  }, [session, countdown, navigating, navigate]);
 
-  useEffect(() => {
-    if (!sessionReady) {
-      setTopBarAction(null);
-      return;
-    }
-
-    const ready = countdown === 0 && !navigating;
-    const label =
-      navigating ? "跳转中..." : countdown > 0 ? `下一步 (${countdown})` : "下一步";
-
-    setTopBarAction(
-      <button
-        type="button"
-        className={`btn-pill btn-pill-next-step${ready ? " btn-pill-next-step-ready" : ""}`}
-        onClick={() => void handleContinue()}
-        disabled={!ready}
-      >
-        {label}
-      </button>
-    );
-
-    return () => setTopBarAction(null);
-  }, [sessionReady, countdown, navigating, handleContinue, setTopBarAction]);
-
-  if (!sessionReady && !bootstrapError) {
+  if (!session && !bootstrapError) {
     return (
-      <section className="flow-page">
+      <section className="flow-page instruction-page">
         <div className="instruction-loading">正在准备实验...</div>
       </section>
     );
   }
 
+  const ready = Boolean(session) && countdown === 0 && !navigating;
+  const ctaLabel = navigating
+    ? "跳转中..."
+    : countdown > 0
+      ? `${INSTRUCTION_CTA_LABEL} (${countdown})`
+      : INSTRUCTION_CTA_LABEL;
+
   return (
-    <section className="flow-page">
+    <section className="flow-page instruction-page">
       <div className="flow-body instruction-body">
+        <h1 className="instruction-welcome">Welcome {session?.completion_code ?? ""}!</h1>
         <div className="scenario-panel">
-          <h2 className="scenario-title">{INSTRUCTION_TITLE}</h2>
-          {INSTRUCTION_PARAGRAPHS.map((paragraph, index) => (
-            <p key={index}>{paragraph}</p>
+          <h2 className="scenario-title">{INSTRUCTION_COPY.title}</h2>
+          {INSTRUCTION_COPY.paragraphs.map((paragraph, index) => (
+            <RichParagraph key={index} text={paragraph} />
           ))}
         </div>
+        <div className="instruction-cta-wrap">
+          <button
+            type="button"
+            className={`btn-pill btn-pill-next-step instruction-cta${ready ? " btn-pill-next-step-ready" : ""}`}
+            onClick={() => void handleContinue()}
+            disabled={!ready}
+          >
+            {ctaLabel}
+          </button>
+        </div>
       </div>
-      {bootstrapError && <p className="error-text instruction-error">{bootstrapError}</p>}
+      {bootstrapError && !session && (
+        <p className="error-text instruction-error">{bootstrapError}</p>
+      )}
     </section>
   );
 }

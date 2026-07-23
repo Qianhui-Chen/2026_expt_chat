@@ -2,12 +2,14 @@ export interface SessionState {
   session_token: number;
   attempt_number: number;
   is_anger: boolean;
+  bot_type: "tool" | "companion";
   completion_code: string;
 }
 
 export interface SessionResponse {
   attempt_number: number;
   is_anger: boolean;
+  bot_type: "tool" | "companion";
   ai_round_count: number;
   chat_finished: boolean;
   experiment_finished: boolean;
@@ -47,7 +49,7 @@ export interface ChatStreamCallbacks {
   onUserMessage?: (message: ChatMessageDTO) => void;
   onThinking?: () => void;
   onToken?: (delta: string) => void;
-  onDone?: (payload: ChatStreamDonePayload) => void;
+  onDone?: (payload: ChatStreamDonePayload) => void | Promise<void>;
   onError?: (message: string) => void;
 }
 
@@ -199,7 +201,7 @@ export const api = {
             break;
           case "done": {
             const donePayload = JSON.parse(parsed.data) as ChatStreamDonePayload;
-            callbacks.onDone?.(donePayload);
+            await callbacks.onDone?.(donePayload);
             break;
           }
           case "error": {
@@ -219,20 +221,46 @@ export const SESSION_KEY = "anger_experiment_session";
 
 export function saveSession(data: SessionState) {
   localStorage.setItem(SESSION_KEY, JSON.stringify(data));
+  window.dispatchEvent(new Event("anger-session-updated"));
 }
 
 export function loadSession(): SessionState | null {
   const raw = localStorage.getItem(SESSION_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as SessionState;
+    const parsed = JSON.parse(raw) as SessionState;
+    return {
+      ...parsed,
+      bot_type: normalizeBotType(parsed.bot_type, parsed.completion_code),
+    };
   } catch {
     return null;
   }
 }
 
+/** 优先用后端 bot_type；缺失时按完成码奇偶推断（奇 tool / 偶 companion） */
+export function normalizeBotType(
+  botType: string | undefined,
+  completionCode: string | undefined
+): "tool" | "companion" {
+  if (botType === "tool" || botType === "companion") {
+    return botType;
+  }
+  const number = Number.parseInt((completionCode ?? "").slice(1), 10);
+  if (Number.isFinite(number)) {
+    return number % 2 === 1 ? "tool" : "companion";
+  }
+  return "tool";
+}
+
 export function clearSession() {
   localStorage.removeItem(SESSION_KEY);
+  window.dispatchEvent(new Event("anger-session-updated"));
+}
+
+function isSessionMissingError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  return /会话不存在|HTTP 404|404/.test(message);
 }
 
 export async function ensureActiveSession(): Promise<SessionState> {
@@ -245,18 +273,31 @@ export async function ensureActiveSession(): Promise<SessionState> {
           session_token: existing.session_token,
           attempt_number: data.attempt_number,
           is_anger: data.is_anger,
+          bot_type: normalizeBotType(data.bot_type, data.completion_code),
           completion_code: data.completion_code,
         };
         saveSession(session);
         return session;
       }
       clearSession();
-    } catch {
-      clearSession();
+    } catch (err) {
+      // 仅会话真正不存在时丢弃本地；网络/代理抖动时继续用本地 session，避免底部闪「请求失败」
+      if (isSessionMissingError(err)) {
+        clearSession();
+      } else {
+        return {
+          ...existing,
+          bot_type: normalizeBotType(existing.bot_type, existing.completion_code),
+        };
+      }
     }
   }
 
   const started = await api.startSession();
-  saveSession(started);
-  return started;
+  const normalized: SessionState = {
+    ...started,
+    bot_type: normalizeBotType(started.bot_type, started.completion_code),
+  };
+  saveSession(normalized);
+  return normalized;
 }

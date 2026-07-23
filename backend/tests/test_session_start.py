@@ -42,10 +42,12 @@ class SessionStartTests(unittest.TestCase):
 
         if number % 2 == 1:
             self.assertEqual(session.position, 0)
-            self.assertEqual(condition.position, "aligned")
+            self.assertEqual(condition.position, "tool")
+            self.assertEqual(condition.bot_type, "tool")
         else:
             self.assertEqual(session.position, 1)
-            self.assertEqual(condition.position, "ambiguous")
+            self.assertEqual(condition.position, "companion")
+            self.assertEqual(condition.bot_type, "companion")
 
     def test_balanced_assignment_spreads_groups(self):
         with self.Session() as db:
@@ -62,9 +64,9 @@ class SessionStartTests(unittest.TestCase):
                 user_id="213",
                 completion_code="213",
                 emotion=emotion_to_iv("anger"),
-                position=position_to_iv("aligned"),
+                position=position_to_iv("tool"),
                 emotion_label="anger",
-                position_label="aligned",
+                position_label="tool",
                 attempt_number=1,
             )
             db.add(session)
