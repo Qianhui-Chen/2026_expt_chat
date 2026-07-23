@@ -122,8 +122,16 @@ export default function MeetYourBotPage() {
   }, [expanded, countdown, navigating, session, navigate]);
 
   useEffect(() => {
-    if (!session || !expanded) {
+    if (!session) {
       setTopBarAction(null);
+      return () => setTopBarAction(null);
+    }
+
+    // 扇形卡牌阶段：导航栏提示点击卡片
+    if (!expanded) {
+      setTopBarAction(
+        <p className="meet-top-hint">{MEET_CLICK_CARD_HINT}</p>
+      );
       return () => setTopBarAction(null);
     }
 
@@ -144,7 +152,15 @@ export default function MeetYourBotPage() {
     );
 
     return () => setTopBarAction(null);
-  }, [session, expanded, countdown, navigating, isCompanion, handleContinue, setTopBarAction]);
+  }, [
+    session,
+    expanded,
+    countdown,
+    navigating,
+    isCompanion,
+    handleContinue,
+    setTopBarAction,
+  ]);
 
   useEffect(() => {
     if (!fanOpen || expanded) return;
@@ -271,7 +287,6 @@ export default function MeetYourBotPage() {
               </div>
             )}
           </div>
-          {!expanded ? <p className="meet-card-hint">{MEET_CLICK_CARD_HINT}</p> : null}
         </div>
       </div>
       {bootstrapError && !session && (

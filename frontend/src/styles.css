@@ -417,11 +417,12 @@ body {
 .meet-top-hint {
   margin: 0;
   font-family: var(--font-ui);
-  font-size: var(--fs-body);
+  font-size: clamp(15px, 2vw, 18px);
   font-weight: 600;
   color: var(--text-main);
   letter-spacing: 0.02em;
   white-space: nowrap;
+  text-align: center;
 }
 
 .meet-stage {
