@@ -104,7 +104,7 @@ export default function InstructionPage() {
   return (
     <section className="flow-page instruction-page">
       <div className="flow-body instruction-body">
-        <h1 className="instruction-welcome">Welcome {session?.completion_code ?? ""}!</h1>
+        <h1 className="instruction-welcome">Welcome!</h1>
         <div className="scenario-panel">
           <h2 className="scenario-title">{INSTRUCTION_COPY.title}</h2>
           {INSTRUCTION_COPY.paragraphs.map((paragraph, index) => (

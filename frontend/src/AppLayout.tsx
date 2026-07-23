@@ -54,11 +54,7 @@ export default function AppLayout() {
       <div className={`app-shell${isInstruction ? " app-shell--no-top-bar" : ""}`}>
         {showTopBar && (
           <header className="top-bar">
-            <div className="top-bar-start">
-              {session?.completion_code ? (
-                <div className="user-id-badge">ID：{session.completion_code}</div>
-              ) : null}
-            </div>
+            <div className="top-bar-start" aria-hidden="true" />
             <div className="top-bar-center">{topBarAction}</div>
             <div className="top-bar-end" aria-hidden="true" />
           </header>
