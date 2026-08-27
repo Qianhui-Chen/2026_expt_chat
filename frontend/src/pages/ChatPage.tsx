@@ -1,17 +1,64 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { api, loadSession, saveSession } from "../api";
-import {
-  MIN_THINKING_MS,
-  THINKING_ROTATE_MS,
-  TYPEWRITER_CHAR_DELAY_MS,
-  pickThinkingPhrases,
-  sleep,
-} from "../content/chatThinking";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { api, loadSession, saveSession, type ChatStreamDonePayload } from "../api";
+import { clipMemoryCue } from "../content/chatThinking";
+import { splitBoldSegments } from "../content/meet";
 import { useTopBarActions } from "../context/TopBarActionsContext";
 import { trackClick, usePageTracking } from "../hooks/usePageTracking";
-import { MAX_ANGER_METER, getAngerMeterLevel, getPendingAngerMeterLevel } from "../utils/angerMeter";
 import { autoResizeTextarea } from "../utils/autoResizeTextarea";
 
+function renderInlineBold(text: string, keyPrefix: string): ReactNode[] {
+  return splitBoldSegments(text).map((segment, index) =>
+    segment.bold ? (
+      <strong key={`${keyPrefix}-${index}`}>{segment.text}</strong>
+    ) : (
+      <span key={`${keyPrefix}-${index}`}>{segment.text}</span>
+    )
+  );
+}
+
+function renderMessageContent(text: string): ReactNode {
+  const lines = text.split("\n");
+  const blocks: ReactNode[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const bulletMatch = /^[-•*]\s+(.*)$/.exec(lines[i].trim());
+    if (bulletMatch) {
+      const items: string[] = [];
+      while (i < lines.length) {
+        const match = /^[-•*]\s+(.*)$/.exec(lines[i].trim());
+        if (!match) break;
+        items.push(match[1]);
+        i += 1;
+      }
+      blocks.push(
+        <ul key={`list-${blocks.length}`} className="message-bullet-list">
+          {items.map((item, index) => (
+            <li key={index}>{renderInlineBold(item, `li-${blocks.length}-${index}`)}</li>
+          ))}
+        </ul>
+      );
+      continue;
+    }
+
+    const paraLines: string[] = [];
+    while (i < lines.length && !/^[-•*]\s+/.test(lines[i].trim())) {
+      paraLines.push(lines[i]);
+      i += 1;
+      if (i < lines.length && /^[-•*]\s+/.test(lines[i].trim())) break;
+    }
+    const para = paraLines.join("\n");
+    if (para.length > 0) {
+      blocks.push(
+        <div key={`text-${blocks.length}`} className="message-text-block">
+          {renderInlineBold(para, `text-${blocks.length}`)}
+        </div>
+      );
+    }
+  }
+
+  return blocks;
+}
 interface MessageBubbleProps {
   role: string;
   content: string;
@@ -21,8 +68,6 @@ interface MessageBubbleProps {
   thinkingLabel?: string;
   thinkingVariant?: "tool" | "companion";
   isStreaming?: boolean;
-  angerLevel?: number;
-  maxAngerMeter?: number;
 }
 
 function MessageBubble({
@@ -34,14 +79,14 @@ function MessageBubble({
   thinkingLabel = "思考中",
   thinkingVariant = "tool",
   isStreaming = false,
-  angerLevel = 0,
-  maxAngerMeter = MAX_ANGER_METER,
 }: MessageBubbleProps) {
   const isAssistant = role === "assistant";
   const hasAngerOutput = isStreaming || content.length > 0;
   const showAngerStyle = isAssistant && isAnger && !isThinking && hasAngerOutput;
-  const showMeter = showAngerStyle && angerLevel > 0;
-  const meterPercent = Math.min(Math.round((angerLevel / maxAngerMeter) * 100), 100);
+
+  if (isAssistant && !content && !isThinking && !isStreaming) {
+    return null;
+  }
 
   const bubbleClasses = [
     "message-bubble",
@@ -55,18 +100,8 @@ function MessageBubble({
     .filter(Boolean)
     .join(" ");
 
-  const showAngerEmojis = showAngerStyle;
-
   const bubble = (
     <div className={bubbleClasses}>
-      {showAngerEmojis && (
-        <>
-          <span className="anger-emoji anger-emoji-tr anger-emoji-lg" aria-hidden="true">💢</span>
-          <span className="anger-emoji anger-emoji-tr anger-emoji-sm" aria-hidden="true">💢</span>
-          <span className="anger-emoji anger-emoji-bl anger-emoji-lg" aria-hidden="true">💢</span>
-          <span className="anger-emoji anger-emoji-bl anger-emoji-sm" aria-hidden="true">💢</span>
-        </>
-      )}
       {isThinking ? (
         <div className={`thinking-chip thinking-chip--${thinkingVariant}`}>
           <p className="thinking-text" aria-live="polite">
@@ -79,15 +114,15 @@ function MessageBubble({
           </p>
         </div>
       ) : (
-        <p>
-          {content}
+        <div className="message-body">
+          {renderMessageContent(content)}
           {isStreaming && (
             <span
               className={`streaming-cursor${showAngerStyle ? " anger-cursor" : ""}`}
               aria-hidden="true"
             />
           )}
-        </p>
+        </div>
       )}
     </div>
   );
@@ -103,17 +138,6 @@ function MessageBubble({
   return (
     <div className="message-row assistant">
       <div className="assistant-message-wrap">
-        {showMeter && (
-          <div className="anger-meter" aria-hidden="true">
-            <span className="anger-meter-label">情绪强度</span>
-            <div className="anger-meter-track">
-              <div className="anger-meter-fill" style={{ width: `${meterPercent}%` }} />
-            </div>
-            <span className="anger-meter-value">
-              {angerLevel}/{maxAngerMeter}
-            </span>
-          </div>
-        )}
         {bubble}
       </div>
     </div>
@@ -147,7 +171,24 @@ type ChatMessageItem = {
 const INTRO_PROMPT =
   "请用不多于 80 个字描述你经历的事件经过和情绪，并与AI进行分析和讨论；AI会基于你的经历给出对应建议。";
 const MAX_INTRO_LENGTH = 80;
-const NEXT_STEP_COUNTDOWN_SEC = 8;
+const FINISH_MODAL_COUNTDOWN_SEC = 5;
+// 收到后端生成的语义转述后，至少展示一小段时间再播放已缓存的回复。
+const MEMORY_CUE_PHASE_MS = 1800;
+const MEMORY_CUE_TEMPLATES = [
+  "🧠 正在写入本轮信息：{label}",
+  "🔎 捕捉到你刚提到的：{label}",
+  "🎯 记住你这次说的：{label}",
+  "📝 本轮关键偏好已提取：{label}",
+  "💬 正在归档你的表达：{label}",
+  "📌 记下关键细节：{label}",
+];
+
+function buildMemoryCueText(label: string, round: number): string {
+  const cleaned = clipMemoryCue(label.replace(/\s+/g, " ").trim(), 22);
+  if (!cleaned) return "正在写入新的用户偏好";
+  const template = MEMORY_CUE_TEMPLATES[(Math.max(round, 1) - 1) % MEMORY_CUE_TEMPLATES.length];
+  return template.replace("{label}", cleaned);
+}
 
 async function copyTextToClipboard(text: string): Promise<boolean> {
   try {
@@ -171,38 +212,40 @@ export default function ChatPage() {
   const { setTopBarAction } = useTopBarActions();
   const chatWindowRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoOpenedForFinishRef = useRef(false);
+  const finishCountdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [messages, setMessages] = useState<ChatMessageItem[]>([]);
   const [input, setInput] = useState("");
-  const [isAnger, setIsAnger] = useState(false);
+  const [isAnger, setIsAnger] = useState(() => loadSession()?.is_anger ?? false);
   const [aiRoundCount, setAiRoundCount] = useState(0);
-  const [maxRounds, setMaxRounds] = useState(6);
+  const [maxRounds, setMaxRounds] = useState(8);
   const [chatFinished, setChatFinished] = useState(false);
   const [experimentFinished, setExperimentFinished] = useState(false);
   const [completionCode, setCompletionCode] = useState<string | null>(null);
   const [showCompletionModal, setShowCompletionModal] = useState(false);
+  const [finishCountdown, setFinishCountdown] = useState<number | null>(null);
   const [idCopied, setIdCopied] = useState(false);
-  const [nextStepCountdown, setNextStepCountdown] = useState<number | null>(null);
-  const [nextStepSubmitting, setNextStepSubmitting] = useState(false);
+  const [gettingId, setGettingId] = useState(false);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
-  const [thinkingStatus, setThinkingStatus] = useState("");
+  const [memoryCue, setMemoryCue] = useState("");
   const [latestAnimatedKey, setLatestAnimatedKey] = useState<string | null>(null);
   const [error, setError] = useState("");
   usePageTracking("chat");
 
-  const handleNextStep = useCallback(async () => {
+  const handleGetCompletionId = useCallback(async () => {
     const session = loadSession();
-    if (!session || nextStepCountdown !== 0 || nextStepSubmitting) return;
+    if (!session || gettingId) return;
 
-    setNextStepSubmitting(true);
+    if (experimentFinished && completionCode) {
+      setShowCompletionModal(true);
+      return;
+    }
+
+    setGettingId(true);
     setError("");
     try {
-      await trackClick("chat", "next-step");
-      if (experimentFinished && completionCode) {
-        setShowCompletionModal(true);
-        return;
-      }
+      await trackClick("chat", "get-completion-id");
       const result = await api.completeExperiment(session.session_token);
       const code = result.completion_code || session.completion_code;
       setCompletionCode(code);
@@ -210,11 +253,11 @@ export default function ChatPage() {
       setExperimentFinished(true);
       setShowCompletionModal(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "操作失败");
+      setError(err instanceof Error ? err.message : "获取 ID 失败");
     } finally {
-      setNextStepSubmitting(false);
+      setGettingId(false);
     }
-  }, [nextStepCountdown, nextStepSubmitting, completionCode, experimentFinished]);
+  }, [gettingId, completionCode, experimentFinished]);
 
   const handleCopyCompletionId = useCallback(async () => {
     if (!completionCode) return;
@@ -229,25 +272,25 @@ export default function ChatPage() {
     }
   }, [completionCode]);
 
+  const handleOpenCompletionModal = useCallback(() => {
+    setShowCompletionModal(true);
+    void trackClick("chat", "reopen-completion-modal");
+  }, []);
+
+  // 第 8 轮结束后：先 5 秒倒计时，再自动弹出实验结束弹窗（仅一次）
   useEffect(() => {
-    if (!chatFinished) {
-      setNextStepCountdown(null);
-      return;
-    }
+    if (!chatFinished || autoOpenedForFinishRef.current) return;
 
-    if (experimentFinished) {
-      setNextStepCountdown(0);
-      return;
-    }
-
-    setNextStepCountdown(NEXT_STEP_COUNTDOWN_SEC);
-    countdownTimerRef.current = setInterval(() => {
-      setNextStepCountdown((prev) => {
+    setFinishCountdown(FINISH_MODAL_COUNTDOWN_SEC);
+    finishCountdownTimerRef.current = setInterval(() => {
+      setFinishCountdown((prev) => {
         if (prev === null || prev <= 1) {
-          if (countdownTimerRef.current) {
-            clearInterval(countdownTimerRef.current);
-            countdownTimerRef.current = null;
+          if (finishCountdownTimerRef.current) {
+            clearInterval(finishCountdownTimerRef.current);
+            finishCountdownTimerRef.current = null;
           }
+          autoOpenedForFinishRef.current = true;
+          setShowCompletionModal(true);
           return 0;
         }
         return prev - 1;
@@ -255,43 +298,49 @@ export default function ChatPage() {
     }, 1000);
 
     return () => {
-      if (countdownTimerRef.current) {
-        clearInterval(countdownTimerRef.current);
-        countdownTimerRef.current = null;
+      if (finishCountdownTimerRef.current) {
+        clearInterval(finishCountdownTimerRef.current);
+        finishCountdownTimerRef.current = null;
       }
     };
-  }, [chatFinished, experimentFinished]);
+  }, [chatFinished]);
 
+  // 关闭弹窗后：导航栏上方可再次查看 / 获取 ID（倒计时期间不显示）
   useEffect(() => {
-    if (!chatFinished || nextStepCountdown === null) {
+    const waitingToOpen =
+      finishCountdown !== null && finishCountdown > 0 && !showCompletionModal;
+    if (!chatFinished || showCompletionModal || waitingToOpen) {
       setTopBarAction(null);
       return;
     }
 
-    const ready = nextStepCountdown === 0 && !nextStepSubmitting;
-    const label =
-      nextStepSubmitting
-        ? "跳转中..."
-        : nextStepCountdown > 0
-          ? `下一步 (${nextStepCountdown})`
-          : "下一步";
-    const session = loadSession();
-    const toneClass =
-      session?.bot_type === "companion" ? "meet-next-btn--companion" : "meet-next-btn--tool";
-
+    const hasId = Boolean(experimentFinished && completionCode);
     setTopBarAction(
       <button
         type="button"
-        className={`btn-pill meet-next-btn ${toneClass}${ready ? " meet-next-btn--ready" : ""}`}
-        onClick={() => void handleNextStep()}
-        disabled={!ready}
+        className="btn-pill meet-next-btn meet-next-btn--ready chat-get-id-btn"
+        onClick={() => {
+          if (hasId) {
+            handleOpenCompletionModal();
+          } else {
+            setShowCompletionModal(true);
+          }
+        }}
       >
-        {label}
+        {hasId ? "查看我的ID" : "实验结束，点击获取ID"}
       </button>
     );
 
     return () => setTopBarAction(null);
-  }, [chatFinished, nextStepCountdown, nextStepSubmitting, handleNextStep, setTopBarAction]);
+  }, [
+    chatFinished,
+    showCompletionModal,
+    finishCountdown,
+    experimentFinished,
+    completionCode,
+    handleOpenCompletionModal,
+    setTopBarAction,
+  ]);
 
   useEffect(() => {
     const session = loadSession();
@@ -316,6 +365,10 @@ export default function ChatPage() {
         }
         if (sessionInfo.experiment_finished) {
           setExperimentFinished(true);
+        }
+        // 刷新进入已结束会话：已拿过 ID 则不强制弹窗，只留顶栏入口
+        if (history.chat_finished && sessionInfo.experiment_finished) {
+          autoOpenedForFinishRef.current = true;
         }
         setMessages(
           history.messages
@@ -365,70 +418,105 @@ export default function ChatPage() {
 
     const optimisticUserKey = `u-pending-${Date.now()}`;
     const streamingAiKey = `a-stream-${Date.now()}`;
-    const thinkingPhrases = pickThinkingPhrases(session.bot_type);
-    const waitStartedAt = Date.now();
-    let tokenBuffer = "";
-    let phraseIndex = 0;
+    const isContingent = session.bot_type === "contingent";
+    const memoryRound = aiRoundCount + 1;
+    let startedStream = false;
+    let memoryPhaseDone = !isContingent;
+    const tokenBuffer: string[] = [];
+    let pendingDone: ChatStreamDonePayload | null = null;
+    let memoryPhaseTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const updateThinkingLabel = (label: string) => {
-      setThinkingStatus(label);
+    const appendAssistantTokens = (delta: string) => {
       setMessages((prev) =>
         prev.map((item) =>
-          item.key === streamingAiKey ? { ...item, thinkingLabel: label, isThinking: true } : item
-        )
-      );
-    };
-
-    const rotationTimer = window.setInterval(() => {
-      phraseIndex = Math.min(phraseIndex + 1, thinkingPhrases.length - 1);
-      updateThinkingLabel(thinkingPhrases[phraseIndex]);
-    }, THINKING_ROTATE_MS);
-
-    const cleanupThinking = () => {
-      window.clearInterval(rotationTimer);
-    };
-
-    const typewriterReveal = async (fullText: string) => {
-      let shouldTriggerAngerAnimate = false;
-      setMessages((prev) => {
-        const streaming = prev.find((item) => item.key === streamingAiKey);
-        shouldTriggerAngerAnimate = Boolean(streaming?.isThinking && isAnger);
-        return prev.map((item) =>
           item.key === streamingAiKey
             ? {
                 ...item,
                 isThinking: false,
                 isStreaming: true,
-                content: "",
+                content: item.content + delta,
               }
             : item
-        );
-      });
-      if (shouldTriggerAngerAnimate) {
-        setLatestAnimatedKey(streamingAiKey);
+        )
+      );
+    };
+
+    const finishStream = (payload: ChatStreamDonePayload) => {
+      setAiRoundCount(payload.ai_round_count);
+      setIsAnger(payload.is_anger);
+      setChatFinished(payload.chat_finished);
+
+      if (!payload.ai_message?.content) {
+        setMessages((prev) => prev.filter((item) => item.key !== streamingAiKey));
+        return;
       }
 
-      for (const char of fullText) {
+      const finalKey = `a-${payload.ai_message.timestamp}`;
+      setMessages((prev) =>
+        prev.map((item) =>
+          item.key === streamingAiKey
+            ? {
+                role: payload.ai_message!.role,
+                content: payload.ai_message!.content,
+                round_number: payload.ai_message!.round_number,
+                key: payload.is_anger ? streamingAiKey : finalKey,
+                isThinking: false,
+                isStreaming: false,
+              }
+            : item
+        )
+      );
+      if (!startedStream) {
+        setLatestAnimatedKey(payload.is_anger ? streamingAiKey : finalKey);
+      }
+    };
+
+    const endMemoryPhase = () => {
+      if (memoryPhaseDone) return;
+      memoryPhaseDone = true;
+      memoryPhaseTimer = null;
+      setMemoryCue("");
+
+      const buffered = tokenBuffer.splice(0).join("");
+      if (buffered) {
+        if (!startedStream) {
+          startedStream = true;
+          if (isAnger) {
+            setLatestAnimatedKey(streamingAiKey);
+          }
+        }
+        appendAssistantTokens(buffered);
+      } else {
         setMessages((prev) =>
           prev.map((item) =>
             item.key === streamingAiKey
-              ? {
-                  ...item,
-                  isThinking: false,
-                  isStreaming: true,
-                  content: item.content + char,
-                }
+              ? { ...item, isThinking: false, isStreaming: true }
               : item
           )
         );
-        await sleep(TYPEWRITER_CHAR_DELAY_MS);
       }
+
+      if (pendingDone) {
+        finishStream(pendingDone);
+        pendingDone = null;
+      }
+    };
+
+    const clearMemoryPhase = () => {
+      if (memoryPhaseTimer) {
+        clearTimeout(memoryPhaseTimer);
+        memoryPhaseTimer = null;
+      }
+      memoryPhaseDone = true;
+      setMemoryCue("");
     };
 
     setSending(true);
     setError("");
     setInput("");
-    setThinkingStatus(thinkingPhrases[0]);
+    if (isContingent) {
+      setMemoryCue("思考中");
+    }
     autoResizeTextarea(textareaRef.current);
 
     setMessages((prev) => [
@@ -444,8 +532,8 @@ export default function ChatPage() {
         content: "",
         round_number: null,
         key: streamingAiKey,
-        isThinking: true,
-        thinkingLabel: thinkingPhrases[0],
+        isThinking: !isContingent,
+        thinkingLabel: "思考中",
         isStreaming: false,
       },
     ]);
@@ -466,91 +554,53 @@ export default function ChatPage() {
             )
           );
         },
+        onMemory: (label) => {
+          if (!isContingent || memoryPhaseDone) return;
+          if (!label.trim()) {
+            endMemoryPhase();
+            return;
+          }
+          setMemoryCue(buildMemoryCueText(label, memoryRound));
+          memoryPhaseTimer = setTimeout(endMemoryPhase, MEMORY_CUE_PHASE_MS);
+        },
         onThinking: () => {
+          if (isContingent) return;
           setMessages((prev) =>
             prev.map((item) =>
               item.key === streamingAiKey
-                ? {
-                    ...item,
-                    isThinking: true,
-                    isStreaming: false,
-                    content: "",
-                    thinkingLabel: thinkingPhrases[phraseIndex],
-                  }
+                ? { ...item, isThinking: true, isStreaming: false, thinkingLabel: "思考中" }
                 : item
             )
           );
         },
         onToken: (delta) => {
-          // 最短等待期间先攒全文，揭示时再逐字打出，避免整段弹出
-          tokenBuffer += delta;
-        },
-        onDone: async (payload) => {
-          const remaining = MIN_THINKING_MS - (Date.now() - waitStartedAt);
-          if (remaining > 0) {
-            await sleep(remaining);
-          }
-          cleanupThinking();
-
-          const fullText = payload.ai_message?.content ?? tokenBuffer;
-          if (!fullText) {
-            setThinkingStatus("");
-            setMessages((prev) => prev.filter((item) => item.key !== streamingAiKey));
-            setAiRoundCount(payload.ai_round_count);
-            setIsAnger(payload.is_anger);
-            setChatFinished(payload.chat_finished);
+          if (isContingent && !memoryPhaseDone) {
+            tokenBuffer.push(delta);
             return;
           }
-
-          setThinkingStatus("输出中");
-          await typewriterReveal(fullText);
-          setThinkingStatus("");
-
-          setAiRoundCount(payload.ai_round_count);
-          setIsAnger(payload.is_anger);
-          setChatFinished(payload.chat_finished);
-
-          if (payload.ai_message) {
-            const finalKey = `a-${payload.ai_message.timestamp}`;
-            setMessages((prev) =>
-              prev.map((item) =>
-                item.key === streamingAiKey
-                  ? {
-                      role: payload.ai_message!.role,
-                      content: payload.ai_message!.content,
-                      round_number: payload.ai_message!.round_number,
-                      key: payload.is_anger ? streamingAiKey : finalKey,
-                      isThinking: false,
-                      isStreaming: false,
-                    }
-                  : item
-              )
-            );
-            if (payload.is_anger) {
+          if (!startedStream) {
+            startedStream = true;
+            if (isAnger) {
               setLatestAnimatedKey(streamingAiKey);
-            } else {
-              setLatestAnimatedKey(finalKey);
             }
-          } else {
-            setMessages((prev) =>
-              prev.map((item) =>
-                item.key === streamingAiKey
-                  ? { ...item, isThinking: false, isStreaming: false }
-                  : item
-              )
-            );
           }
+          appendAssistantTokens(delta);
+        },
+        onDone: (payload) => {
+          if (isContingent && !memoryPhaseDone) {
+            pendingDone = payload;
+            return;
+          }
+          finishStream(payload);
         },
         onError: (message) => {
-          cleanupThinking();
-          setThinkingStatus("");
+          clearMemoryPhase();
           setError(message);
           setMessages((prev) => prev.filter((item) => item.key !== streamingAiKey));
         },
       });
     } catch (err) {
-      cleanupThinking();
-      setThinkingStatus("");
+      clearMemoryPhase();
       setError(err instanceof Error ? err.message : "发送失败");
       setMessages((prev) =>
         prev.filter((item) => item.key !== optimisticUserKey && item.key !== streamingAiKey)
@@ -581,6 +631,7 @@ export default function ChatPage() {
   if (isIntroPhase) {
     return (
       <section className="flow-page chat-page chat-intro-page">
+        <div className="chat-main">
         <div className="chat-intro">
           <p className="chat-intro-prompt">{INTRO_PROMPT}</p>
           <div className="chat-input-bar chat-intro-input-bar">
@@ -610,32 +661,17 @@ export default function ChatPage() {
           </p>
           {error && <p className="error-text">{error}</p>}
         </div>
+        </div>
       </section>
     );
   }
 
-  const sessionToken = loadSession()?.session_token ?? 0;
-  const thinkingVariant =
-    loadSession()?.bot_type === "companion" ? "companion" : "tool";
-
-  const getAngerLevel = (message: ChatMessageItem) => {
-    if (!isAnger || message.role !== "assistant" || !sessionToken) return 0;
-
-    if (message.round_number && message.round_number > 0) {
-      return getAngerMeterLevel(message.round_number, sessionToken);
-    }
-
-    if (message.isStreaming) {
-      const nextRound = aiRoundCount + 1;
-      return getPendingAngerMeterLevel(nextRound, sessionToken);
-    }
-
-    return 0;
-  };
+  const thinkingVariant = isAnger ? "companion" : "tool";
 
   return (
     <>
       <section className="flow-page chat-page">
+        <div className="chat-main">
         <div className="chat-window" ref={chatWindowRef}>
           {messages.map((message) => (
             <MessageBubble
@@ -648,10 +684,16 @@ export default function ChatPage() {
               thinkingLabel={message.thinkingLabel}
               thinkingVariant={thinkingVariant}
               isStreaming={message.isStreaming}
-              angerLevel={getAngerLevel(message)}
-              maxAngerMeter={MAX_ANGER_METER}
             />
           ))}
+          {memoryCue && (
+            <p className="memory-cue" aria-live="polite">
+              {memoryCue}
+              <span className="memory-cue-dots" aria-hidden="true">
+                ……
+              </span>
+            </p>
+          )}
         </div>
         {error && <p className="error-text chat-error">{error}</p>}
         <div className="chat-composer">
@@ -659,7 +701,11 @@ export default function ChatPage() {
             <p className="chat-input-hint">请输入你的问题</p>
           )}
           {chatFinished && (
-            <p className="chat-input-hint chat-input-hint-muted">聊天已结束</p>
+            <p className="chat-input-hint chat-input-hint-muted" aria-live="polite">
+              {finishCountdown !== null && finishCountdown > 0
+                ? `聊天已结束，请等待【${finishCountdown}】`
+                : "聊天已结束"}
+            </p>
           )}
           <div className="chat-input-bar">
             <textarea
@@ -684,32 +730,59 @@ export default function ChatPage() {
           </div>
           <p className="chat-progress" aria-live="polite">
             {sending
-              ? thinkingStatus
-                ? `${thinkingStatus}…`
-                : "AI 正在思考…"
+              ? memoryCue
+                ? "正在写入记忆…"
+                : "正在回复…"
               : `AI 回复进度：${aiRoundCount}/${maxRounds}`}
           </p>
         </div>
+        </div>
       </section>
 
-      {showCompletionModal && completionCode && (
+      {showCompletionModal && (
         <div className="modal-backdrop" role="presentation">
           <div
             className="modal-card completion-code-card"
             role="dialog"
             aria-modal="true"
-            aria-label="完成代码"
+            aria-label="实验结束"
           >
-            <p className="completion-code-message">
-              请复制您的ID，填入刚才的问卷，并且完成后测题目，感谢您的配合。
-            </p>
-            <p className="completion-code-value">{completionCode}</p>
+            <h2 className="modal-title">实验结束</h2>
+            {experimentFinished && completionCode ? (
+              <>
+                <p className="completion-code-message">
+                  请复制您的 ID，填入刚才的问卷并继续完成后测题目，感谢您的配合。
+                </p>
+                <p className="completion-code-value">{completionCode}</p>
+                <button
+                  type="button"
+                  className="btn-pill btn-pill-nav completion-code-copy"
+                  onClick={() => void handleCopyCompletionId()}
+                >
+                  {idCopied ? "已复制" : "复制我的ID"}
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="completion-code-message">
+                  八轮对话已完成。请点击下方按钮获取您的实验 ID，复制后回到问卷界面继续完成后测。
+                </p>
+                <button
+                  type="button"
+                  className="btn-pill meet-next-btn meet-next-btn--ready completion-code-copy"
+                  onClick={() => void handleGetCompletionId()}
+                  disabled={gettingId}
+                >
+                  {gettingId ? "获取中..." : "点击获取ID"}
+                </button>
+              </>
+            )}
             <button
               type="button"
-              className="btn-pill btn-pill-nav completion-code-copy"
-              onClick={() => void handleCopyCompletionId()}
+              className="modal-close-text-btn"
+              onClick={() => setShowCompletionModal(false)}
             >
-              {idCopied ? "已复制" : "复制我的ID"}
+              关闭窗口，查看聊天记录
             </button>
           </div>
         </div>

@@ -137,6 +137,8 @@ def run_migrations() -> None:
                     "WHERE completion_code IS NULL AND user_id IS NOT NULL"
                 )
             )
+        if "user_profile" not in columns:
+            conn.execute(text("ALTER TABLE user_sessions ADD COLUMN user_profile TEXT"))
 
         columns = _table_columns(inspect(conn), "user_sessions")
         if "emotion_label" not in columns and "emotion" in columns:
@@ -155,12 +157,24 @@ def run_migrations() -> None:
             conn.execute(
                 text(
                     "UPDATE user_sessions SET emotion = 0 "
-                    "WHERE emotion_label = 'anger' AND (emotion IS NULL OR emotion = 0)"
+                    "WHERE emotion_label IN ('anger', 'ingroup')"
                 )
             )
             conn.execute(
                 text(
                     "UPDATE user_sessions SET emotion = 1 "
+                    "WHERE emotion_label IN ('neutral', 'outgroup')"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE user_sessions SET emotion_label = 'ingroup' "
+                    "WHERE emotion_label = 'anger'"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE user_sessions SET emotion_label = 'outgroup' "
                     "WHERE emotion_label = 'neutral'"
                 )
             )
@@ -174,6 +188,30 @@ def run_migrations() -> None:
                 text(
                     "UPDATE user_sessions SET position = 1 "
                     "WHERE position_label = 'ambiguous'"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE user_sessions SET position_label = 'generic' "
+                    "WHERE position_label IN ('tool', 'aligned')"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE user_sessions SET position_label = 'contingent' "
+                    "WHERE position_label IN ('companion', 'ambiguous')"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE user_sessions SET position = 0 "
+                    "WHERE position_label = 'generic'"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE user_sessions SET position = 1 "
+                    "WHERE position_label = 'contingent'"
                 )
             )
 

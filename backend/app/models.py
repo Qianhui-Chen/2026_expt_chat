@@ -23,6 +23,7 @@ class UserSession(Base):
     has_similar_experience: Mapped[int | None] = mapped_column(Integer, nullable=True)
     exit_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     completion_code: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    user_profile: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     click_events: Mapped[list["ClickEvent"]] = relationship(back_populates="session")

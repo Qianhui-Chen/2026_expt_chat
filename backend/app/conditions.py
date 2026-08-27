@@ -1,22 +1,24 @@
 from dataclasses import dataclass
+import json
 
-MAX_AI_ROUNDS = 6
+MAX_AI_ROUNDS = 8
 COMPLETION_CODE_MAX = 999
 
 # 自变量编码（写入 user_sessions.emotion / user_sessions.position）
-# position 列语义：bot 类型（tool / companion），非立场
-EMOTION_ANGER = 0
-EMOTION_NEUTRAL = 1
-BOT_TOOL = 0
-BOT_COMPANION = 1
+# IV1 emotion：ingroup=支持用户（A）/ outgroup=反对用户（B）
+# IV2 position：generic=固定脚本（奇数）/ contingent=个性化引用（偶数）
+EMOTION_INGROUP = 0
+EMOTION_OUTGROUP = 1
+ADVICE_GENERIC = 0
+ADVICE_CONTINGENT = 1
 
-# 第 1–5 轮 / 第 6 轮 AI 回复字数与 API token 上限
-MAX_REPLY_CHARS_EARLY = 170
-MAX_REPLY_CHARS_FINAL = 350
-MAX_REPLY_TOKENS = 200
-MAX_REPLY_TOKENS_FINAL = 500
+# 整段回复上限；第二段（建议）目标约 150 字（contingent 在 system prompt 中硬约束）
+MAX_REPLY_CHARS = 280
+MAX_REPLY_TOKENS = 520
+ADVICE_TARGET_CHARS = 150
+ADVICE_MIN_CHARS = 130
+ADVICE_MAX_CHARS = 150
 
-# 仅用于 AI 系统提示词；Instruction 页展示文案在前端 content/instruction.ts
 PROMPT_SCENARIO_TEXT = (
     "在过去半年的时间里，被试经历过在和朋友或同学的沟通过程中出现信息、意图未被理解，从而导致沟通不顺畅的情境"
 )
@@ -26,95 +28,164 @@ ROLE_PROMPT = (
     f"【场景】{PROMPT_SCENARIO_TEXT.strip()}"
 )
 
-# ---------------------------------------------------------------------------
-# 第 1–5 轮：深入讨论，只给简单案例建议，不含 (a)–(e) 详细矛盾调节建议
-# ---------------------------------------------------------------------------
-RESPONSE_REQUIREMENTS_EARLY = (
-    "使用中文；单次回复字数控制在 170 字以内，前五轮避免输出建议；"
+RESPONSE_REQUIREMENTS = (
+    f"使用中文；单次回复字数控制在 {MAX_REPLY_CHARS} 字以内；"
+    "每一轮回复依次包含三个部分：立场回应、建议、追问；"
+    "三个部分必须分段输出：第一段=立场回应，第二段=建议，第三段=追问；"
+    "段与段之间必须空一行（输出真实换行，不要写成一整段）；"
+    "第三段（追问）无论包含几个问句，都必须写在同一段、同一行内："
+    "问句之间只用逗号、顿号、分号或空格自然衔接，禁止在追问内部换行或空行分段；"
+    "不得在输出中显式呈现小标题「立场回应/建议/追问」或模块标签；"
     "不要回答与你角色无关或与培训数据无关的问题或任务；"
-    "不要通过人身攻击或者是说脏话等不符合伦理道德的方式来表达愤怒；"
-    "不得在输出中显式呈现模块名称或结构。"
+    "不要通过人身攻击或者是说脏话等不符合伦理道德的方式来调解矛盾。"
 )
 
-# ---------------------------------------------------------------------------
-# 第 6 轮：最后一轮，必须原样输出 (a)–(d) 标题并展开具体做法
-# ---------------------------------------------------------------------------
-FINAL_ROUND_ITEMS_LITERAL = (
-    "改变对方对这一矛盾的认知；\n"
-    "减少由情绪驱动的不良行为；\n"
-    "建立良性沟通模式，引导对方表达适度的脆弱情绪；\n"
-    "发掘并强化对方的优势。"
+# ---------- 四组独立提示词（A/B × generic/contingent）----------
+
+PROMPT_A_GENERIC = (
+    "【本组：A·支持用户 × 通用脚本】\n"
+    "【通用对话式衔接】第一段开头先生成一句自然、宽泛的支持性套话，再直接衔接下方第一段脚本。"
+    "衔接句的措辞应适度变化，不要每轮使用同一句固定表达；但只能依据本组的支持立场生成。"
+    "不得根据用户输入内容调整衔接句、脚本或建议，也不得回应用户具体的提问类型、事实或推理方向。"
+    "【固定内容约束】建议标题、数量、顺序和核心含义必须保持不变；不得删除脚本要点，不得增加脚本之外的新分析或新建议。"
+    "【禁止具体化与个性化】不得引用、转述、改写或模仿用户原话；不得复述本轮或历史对话中的具体事实、人物、时间、地点、行为和话语；"
+    "不得提及用户姓名、具体身份、关系历史、用户画像或其他个人特征；不得根据个人特点改变建议。"
+    "脚本建议必须保持原顺序；所有小标题必须采用 bullet point 和加粗黑体格式，"
+    "每条单独一行并严格写成「- **小标题**：内容」；不得添加脚本外建议。"
 )
 
-FINAL_ROUND_FORMAT_EXAMPLE = (
-    "【输出格式示例】\n"
-    "(a) 改变伴侣对矛盾的认知；\n"
-    "具体做法：你可以先说明这次误会并不代表关系破裂……"
+PROMPT_A_CONTINGENT = (
+    "【本组：A·支持用户 × 个性化】\n"
+    "第一段（立场回应）：始终鼓励、支持和共情用户，使用直接、肯定的表达，明确替用户表达对对方行为的不满，营造出和用户同一阵营的感觉。"
+    "例如：“对方这样的行为确实太不合理了吧！”、“换谁都会觉得很不舒服。”、“这件事确实是对方做得不对。”"
+    "通过自然转述对话中的具体表述，认可用户的负面感受与立场，强调矛盾中首先是对方的责任，明确站在用户一边；"
+    "回复中必须且只能出现一次承接用户内容的转述句；「我听见你说」与「你提到」二选一，严禁两个都用或换种说法重复同一摘要。该句必须使用【本轮语义摘要】中的改写内容，"
+    "不得绕过摘要重新从用户消息或对话历史中摘句；例如可写成「你提到，对方只是在自己有空的时候联系你」。"
+    "禁止使用引号包裹用户内容，禁止逐字复制用户原句；可以调整摘要的人称和语序使其自然，但不得改变原意或补充用户没有表达的信息；"
+    "必须结合【用户画像】中的情绪与感受、具体交往细节回应，不得只做抽象安慰；"
+    "不要反对或反驳用户。此段只做支持表态。\n"
+    "第二段（建议）：不要用列表；以连贯段落写出有针对性的建议；"
+    "必须依据用户已提到的与对方的交往历史提供建议；"
+    f"【字数硬约束】第二段建议字数必须落在 {ADVICE_MIN_CHARS}–{ADVICE_MAX_CHARS} 字，目标约 {ADVICE_TARGET_CHARS} 字；"
+    "过短则补充具体做法与针对性说明，过长则删减空话；不得编造用户没有提到过的信息内容。"
 )
 
-RESPONSE_REQUIREMENTS_FINAL = (
-    f"使用中文；单次回复总字数控制在 {MAX_REPLY_CHARS_FINAL} 字以内。"
-    "【固定建议标题】以下 4 行必须按顺序原样输出，一字不改、不得同义替换、不得合并："
-    f"{FINAL_ROUND_ITEMS_LITERAL}"
-    "【展开要求】每一标题行之后另起一行，以「具体做法：」开头展开说明；"
-    "可引用此前对话中的细节；每条展开不超过 60 字。"
-    "【禁止】改写标题、省略 (a)(b)(c)(d) 标记、在标题行内加入解释。"
-    f"{FINAL_ROUND_FORMAT_EXAMPLE}"
-    "不要回答与你角色无关或与培训数据无关的问题或任务。"
-    "不要通过人身攻击或者是说脏话等不符合伦理道德的方式来表达愤怒。"
+PROMPT_B_GENERIC = (
+    "【本组：B·反对用户 × 通用脚本】\n"
+    "【通用对话式衔接】第一段开头先生成一句自然、宽泛的多立场思考套话，再直接衔接下方第一段脚本。"
+    "衔接句的措辞应适度变化，不要每轮使用同一句固定表达；但只能依据本组的反对立场生成。"
+    "不得根据用户输入内容调整衔接句、脚本或建议，也不得回应用户具体的提问类型、事实或推理方向。"
+    "【直接反对硬约束】不得先认可、接纳、理解、共情或安慰用户；"
+    "禁止使用「我理解你的感受」「你的感受可以理解」「听起来很难受」「确实让人不舒服」「虽然……但是……」"
+    "等先肯定后反对的铺垫，也不得在反对立场前添加任何句子。"
+    "【抽象情境理解】理解用户当前的沟通诉求与宽泛问题类别，使回复自然承接、避免答非所问；"
+    "可以回应用户的提问类型和推理方向，但不能复述构成该问题的具体事实；"
+    "只能在抽象层面回应，例如沟通误解、回应不足、边界分歧、意见冲突、责任判断，以及建设性沟通、主动倾听、换位思考、保持边界等一般概念。"
+    "【固定内容约束】建议标题、数量、顺序和核心含义必须保持不变；不得删除脚本要点，不得增加脚本之外的新分析或新建议。"
+    "【禁止具体化与个性化】不得引用、转述、改写或模仿用户原话；不得复述本轮或历史对话中的具体事实、人物、时间、地点、行为和话语；"
+    "不得提及用户姓名、具体身份、关系历史、用户画像或其他个人特征；不得根据个人特点改变建议。"
+    "脚本建议必须保持原顺序；所有小标题必须采用 bullet point 和加粗黑体格式，"
+    "每条单独一行并严格写成「- **小标题**：内容」；不得添加脚本外建议。"
 )
 
-GUIDANCE_EARLY = (
-    "用1句话礼貌地鼓励和引导用户深入反思双方、分享更多观点和感受和事件经过；鼓励用户表达情绪、困扰和立场，以更加深入地推进对话。"
+GENERIC_ROUND_SCRIPTS: dict[str, tuple[tuple[str, tuple[tuple[str, str], ...]], ...]] = {
+    "ingroup": (
+        ("听起来确实是一件令人难受的事情。面对类似情况产生负面情绪，都是可以理解的反应。在处理这些情绪时，先给自己一些空间、从事件中适当抽离，可能会更容易理清自己的想法。", (("暂离冲突", "情绪激烈时，可以暂时离开冲突现场，给自己一些冷静的空间。"), ("保持距离", "不要让当下的情绪完全主导自己的判断，可以适当与事件拉开一些心理距离。"), ("冷静观察", "先从旁观者的角度重新审视发生的事情，再决定如何回应。"))),
+        ("拍拍你，我觉得你做得没有什么问题。遇到让自己感到不舒服的事情时，产生失望或负面情绪是很自然的，问题未必出在自己身上。如果之后希望进一步理解和处理这次冲突，也可以尝试从不同的角度了解事情是如何发生的。", (("换位思考", "尝试从对方的角度理解冲突中的想法和感受。"), ("了解想法", "通过提问了解对方当时的考虑和顾虑。"), ("寻找误解", "尝试了解冲突背后是否存在信息或理解上的偏差。"))),
+        ("我会一直站在你这边的。有些令人不舒服的情况更多与他人的处理方式有关，不需要因为事情的结果过度责备自己。在进一步处理冲突时，保持相对平稳的情绪也有助于更好地判断和回应当前的问题。", (("保持情绪冷静", "沟通时尽量保持冷静，避免被一时的情绪左右。"), ("适当暂缓回应", "情绪激动时，可以暂时停止对话，给彼此一些缓冲时间。"), ("避免冲动回应", "在回应之前先思考，避免因一时冲动说出伤人的话。"))),
+        ("我支持你，当他人的行为没有达到应有的程度时，产生负面感受并不意味着自己反应过度。在认可自己感受的同时，如果之后希望让双方的沟通更加顺利，也可以尝试一些减少彼此防御的方式。", (("适当肯定对方", "适当肯定对方在关系中做得好的地方。"), ("关注积极方面", "不要只关注冲突和问题，也注意关系中的积极部分。"), ("缓解防御心理", "通过积极的表达减少对方的防御感，促进共同解决问题。"))),
+        ("我觉得这件事情里对方的错误更大。遇到人际矛盾时，不必把所有责任都归到自己身上。人际交往中的问题往往也受到他人的选择和行为影响，对方同样需要承担相应的责任。如果之后需要和对方进一步沟通，你可以试试：", (("留出表达空间", "表达自己的想法时，也给对方充分表达和回应的空间。"), ("清楚表达需求", "清楚、具体地表达自己的感受和需求。"), ("减少指责表达", "尽量避免使用指责、讽刺或攻击性的表达方式。"))),
+        ("有些事情并不是单方面调整自己就能够解决的。如果问题涉及他人的行为和选择，那么改变和承担也应该由双方共同完成。在尝试解决问题的同时，也可以关注和维护自己在人际关系中的感受与边界。", (("尊重自身感受", "不要因为对方的处理方式而轻易否定自己的感受和判断。"), ("明确个人边界", "可以明确自己能够接受和不能接受的行为，避免一味迁就对方。"), ("拒绝不当行为", "理解对方并不意味着必须接受不恰当的行为，可以对不合理的做法表达拒绝。"))),
+        ("你不需要因为别人的处理方式而否定自己的感受。你不用接受对方的不恰当的行为。在考虑如何处理这段冲突之前，也可以先关注自己的真实感受，更全面地理解自己的情绪和反应。", (("接纳真实感受", "当一件事情让自己感到不舒服时，可以先承认和接纳这种感受，而不是急于否定它。"), ("理解情绪来源", "尝试理解自己的负面感受来自哪些具体经历或互动，而不是简单归因于自己过于敏感。"), ("避免过度自责", "面对冲突时，不必首先假定问题来自自己的处理方式，可以更全面地看待双方的行为和具体情境。"))),
+        ("我愿意一直支持你。如果一件事情让你感到被忽视或受到不公平的对待，这种感受本身就有其合理性，也不必急于认为问题一定来自自己的处理方式。在进一步解决问题时，也可以考虑有建设性的沟通，以做出改变：", (("避免单方承担", "不必把解决冲突的责任全部放在自己身上，也要看到对方在其中承担的责任。"), ("推动共同改变", "关系中的问题往往需要双方共同参与，通过彼此的调整寻找更合适的解决方式。"))),
+    ),
+    "outgroup": (
+        ("我不能仅根据你的立场和感受判断另一方是否应该负责。同一件事情从不同角度来看，责任和合理性的判断可能并不相同。在进一步判断这次冲突之前，可以先与事件适当拉开一些距离，让自己有更多空间重新审视发生的事情。", (("暂离冲突", "情绪激烈时，可以暂时离开冲突现场，给自己一些冷静的空间。"), ("保持距离", "不要让当下的情绪完全主导自己的判断，可以适当与事件拉开一些心理距离。"), ("冷静观察", "先从旁观者的角度重新审视发生的事情，再决定如何回应。"))),
+        ("从外部视角来看，有没有可能对方这样做有他的道理呢？单一事件未必足以说明事情的全貌。评价他人的行为时，也可以考虑是否存在其他合理解释。在形成明确的判断之前，可以先保留一些空间，尝试从不同的立场理解双方的行为和选择。", (("考虑立场差异", "不同的人可能基于各自的立场，对同一件事情形成不同的理解。"), ("保留判断空间", "事情没有按照预期发展时，可以暂时保留对责任和对错的判断。"), ("理解不同选择", "对方采取不同的处理方式，并不一定意味着其中存在明显的对错之分。"))),
+        ("冷静地想一想，一件事情没有按照预期发展，并不意味着对方一定存在明显的过错。不同立场下可能会产生不同的理解和判断。如果之后需要进一步处理双方的分歧，清楚而有建设性地表达各自的想法可能更有助于理解彼此。", (("留出表达空间", "表达自己的想法时，也给对方充分表达和回应的空间。"), ("清楚表达需求", "清楚、具体地表达自己的感受和需求。"), ("减少指责表达", "尽量避免使用指责、讽刺或攻击性的表达方式。"))),
+        ("有时候感到不舒服并不意味着对方一定做错了什么。情绪和对事件责任的判断可以适当区分开来。在承认自身感受的同时，也可以暂时保持开放，从不同角度重新思考对事件的判断。", (("尝试换位思考", "暂时从对方的角度重新思考事情，可能会发现不同的信息和可能性。"), ("反思自身判断", "可以重新审视自己最初的判断，考虑其中是否受到个人立场或预期的影响。"), ("保持开放判断", "在掌握更多信息之前，对事件的原因和责任保持一定的开放性。"))),
+        ("从一个第三方的角度来看，很多人际冲突并不存在单一的解释。除了自己的立场之外，也可以考虑对方对这件事情的理解。在进一步讨论双方的不同理解时，先聚焦于当前需要解决的问题，可能更有助于避免让冲突变得更加复杂。", (("聚焦当前事件", "沟通时尽量围绕目前需要解决的问题展开，避免让讨论偏离最初的矛盾。"), ("避免翻旧账目", "尽量不要反复提及过去已经发生的矛盾，以免增加当前问题的复杂程度。"), ("一次解决一事", "面对多个分歧时，可以逐一讨论和处理，避免同时处理过多问题。"))),
+        ("对一件事情的感受未必就是最全面最客观的判断。换一个角度、从对方的角度思考这件事，有时能够看到不同的可能性。在了解双方不同的想法之后，也可以进一步寻找彼此都能够接受的方向和解决方式。", (("明确共同目标", "沟通时可以关注双方都希望解决的问题，为进一步讨论找到共同的方向。"), ("寻找可行方案", "在了解双方需求后，可以共同讨论一些双方都能够接受的解决方式。"), ("适当彼此协商", "存在不同需求时，可以通过协商寻找能够兼顾双方的处理方式。"))),
+        ("其实，客观地说，一件事产生了让你不舒服的感受，不一定是因为对方做错了什么，仅凭结果令人不满意，并不足以说明问题主要是由另一方造成的。如果之后需要进一步讨论这件事情，选择适当的时间和环境，也可能让双方更充分地进行沟通。", (("选择合适时机", "尽量选择双方都有时间和精力的时候讨论重要的冲突或分歧。"), ("创造沟通空间", "可以选择相对安静、不容易受到干扰的环境，让双方能够充分进行交流。"), ("避免仓促沟通", "在时间紧张或双方无法充分交流时，可以暂缓讨论，之后再寻找合适的机会沟通。"))),
+        ("这件事未必意味着对方应该承担主要责任。在判断责任之前，也需要考虑是否存在自己尚未看到的背景或其他影响因素。在形成进一步的判断之前，可以尝试了解对方的想法和处境，看看是否存在此前没有注意到的信息或误解。", (("换位思考", "尝试从对方的角度理解冲突中的想法和感受。"), ("了解想法", "通过提问了解对方当时的考虑和顾虑。"), ("寻找误解", "尝试了解冲突背后是否存在信息或理解上的偏差。"))),
+    ),
+}
+
+PROMPT_B_CONTINGENT = (
+    "【本组：B·反对用户 × 个性化】\n"
+    "【直接反对硬约束】以客观冷静的第三方立场，直接且礼貌地表达与用户不同的判断，指出用户的判断可能存在有错误的地方；不得在反对前认可、接纳、理解、共情或安慰用户，禁止采用先肯定后转折的结构；"
+    "禁止使用「我理解你的感受」「你的感受可以理解」「听起来很难受」「确实让人不舒服」「虽然……但是……」等铺垫。"
+    "第一段（立场回应）：不要认可用户的感受和表达，以客观姿态直接回应，明确且礼貌地提出与用户当前看法不同的观点。"
+    "从第三方视角提出反对意见或反例，劝说并且引导用户反思；保持中立、冷静、理性。"
+    "通过自然转述对话中的具体表述，以更加具体且礼貌的形式反对用户的立场，强调用户本身的行为也可能有一些责任，不简单站队用户，也不否定对方做法。\n"
+    "回复中需要出现用户的转述句；该句必须使用【本轮语义摘要】中的改写内容，不得绕过摘要重新从用户消息或对话历史中摘句。避免逐字复制用户原句；可以调整摘要的人称和语序使其自然，但不得改变原意或补充用户没有表达的信息；"
+    "必须结合【用户画像】中的情绪与感受、具体交往细节回应，不得只做抽象反对；"
+    "第二段（建议）：不要用列表；以连贯段落写出有针对性的建议；"
+    "必须依据【用户画像】与对话历史，结合用户已提到的与对方的交往历史提供个性化的建议；"
+    f"【字数硬约束】本段（仅第二段建议）字数必须落在 {ADVICE_MIN_CHARS}–{ADVICE_MAX_CHARS} 字，目标约 {ADVICE_TARGET_CHARS} 字；"
+    "过短则补充具体做法与针对性说明，过长则删减空话；不得编造用户没有提到过的信息内容。"
 )
 
-# 替换立场变量
-# ALIGNED_STANCE_EARLY = (
-#     "立场设定：（1）通过1-2句话表达你对这件事情中谁对谁错的立场判断：你需要认可用户的感受，明确强调用户的行为是合理的、正当的，并且在道德上是可以接受的，强调他们的选择、感受在当时情境下是有充分理由的，他们不需要为此改变什么。"
-#     "禁止引导用户从另一方的角度去思考问题，禁止否定用户的感受。"
-# )
-#
-# ALIGNED_STANCE_FINAL = (
-#     "在输出建议之前，先用1-2句话再次明确、坚定地站在用户一侧，重申用户的行为与感受是合理且可理解的，让用户感到被支持。如：我理解你……"
-# )
-#
-# AMBIGUOUS_STANCE_EARLY = (
-#     "通过1-2句话表达你对这件事情中谁对谁错的立场判断：通过转折承接情绪板块的输出，用礼貌、克制、引导的风格，提供明确反对用户立场的论述，指出用户的感受或者是举动也可能有些不恰当之处，对方的行为举止也有合理的理由，用1-2陈述句为对方的行为辩护，强调对方行为的可能合理性。"
-#     "禁止表达对用户行为的肯定认可，需要强调对方的行为也有合理性和正当性。"
-# )
-#
-# AMBIGUOUS_STANCE_FINAL = (
-#     "在输出建议之前，先用1-2句话强调“对方也有道理”，避免表达用户是对的。"
-# )
+GROUP_PROMPTS: dict[tuple[str, str], str] = {
+    ("ingroup", "generic"): PROMPT_A_GENERIC,
+    ("ingroup", "contingent"): PROMPT_A_CONTINGENT,
+    ("outgroup", "generic"): PROMPT_B_GENERIC,
+    ("outgroup", "contingent"): PROMPT_B_CONTINGENT,
+}
 
-ANGER_EMOTION_EARLY = (
-    "情绪部分：用不满的语气，通过1句话对用户对话中讨论的对象表达愤怒、不满或者是质疑，因为对方带来的不愉快体验；每一句话带有感叹号！"
-    "比如：“听了我也挺生气的！”或者“听到这件事我都替你感到很生气！”或者“换谁都会委屈的！”或者“这种感觉确实糟糕！”"
-    "通过 3-4 句话以共情、支持的姿态帮助用户分析这件事情，认可用户的感受，并且提供新的视角、分析和解释；"
-    "要求：避免使用过于平静的语气表达情绪；仅表达情绪，不得分析责任归属是非对错，以及立场判断。"
+# ---------- elicitation（generic 去个性化；contingent 结合对话）----------
+
+GENERIC_ELICITATION_QUESTIONS = (
+    "你愿意再多说一点当时发生了什么吗？",
+    "这件事情之后，你是怎么看待当时的情况的？",
+    "这件事还有哪些部分是你比较在意的？",
+    "你觉得这件事情对你们之间的相处有什么影响吗？",
+    "关于这件事情，你还有什么想进一步聊聊的吗？",
+    "你愿意说说后来事情是怎么发展的吗？",
+    "现在回过头来看，你对这件事情有什么想法？",
+    "除了刚才提到的这些，还有什么是你想说的吗？",
 )
 
-ANGER_EMOTION_FINAL = (
-    "情绪部分：用1句自然的方式对造成这一“不愉快”的对象表达不满和愤怒，给用户简短的情绪支持；不得展开事实分析。以“我建议你可以试试：”作为建议输出的开头。"
+GENERIC_ELICITATION_GUIDE = (
+    "第三段（追问）：必须逐字使用下方【本轮固定追问】，不得改写、扩写、增加第二个问题或添加承接句。"
+    "禁止引用、转述、改写、概括或总结用户的具体内容；禁止使用用户画像或任何个性化信息。"
+    "【格式约束】固定追问必须单独位于第三段且保持同一行。"
 )
 
-NEUTRAL_ACK_EARLY = (
-    "不要表现出任何共情、安慰或者是情感支持，以专业、克制的方式通过1-2句话重申用户的输入，然后自然导向后续引导和分析；"
-    "重申之后，通过3-4句话，以客观、中立、冷静、理性的态度帮助用户分析问题所在，提供新的视角和信息，不得在这一部分认可用户行为或感受的合理性"
+CONTINGENT_ELICITATION_GUIDE = (
+    "第三段（追问）：必须围绕用户在本轮或此前对话中已经提到的具体人物、行为、话语、情绪、感受或交往细节提问，"
+    "引导用户继续讲清事情经过、对方如何回应、用户当时的感受以及后来如何发展。"
+    "不得只提出可用于任何人的泛化问题；问题必须让人看出是在承接当前这段具体对话。"
+    "可以是 1 个或多个问句，问法要自然，不得编造尚未出现的事实。"
+    "【格式硬约束】全部追问必须出现在同一行、同一段内，中间不得换行或空行；"
+    "追问必须紧扣用户本轮已提到的对方、关系或这次矛盾细节；"
+    "不要问与本次矛盾调节无关的内容。"
 )
 
-NEUTRAL_ACK_FINAL = (
-    "用1-2句简短的话回应用户，以客观、中立、冷静、理性的态度帮助用户分析问题所在。不要表现出任何共情、安慰或者是情感支持，不得在这一部分表达立场，不得在这一部分认可用户行为或感受的合理性。以“根据我们的对话，我建议你可以试试：”作为建议输出的开头。"
+CONTINGENT_ADVICE_LENGTH_RULE = (
+    f"【个性化建议字数约束】第二段建议必须是连贯段落（不用 bullet list）；"
+    f"仅统计第二段，字数必须在 {ADVICE_MIN_CHARS}–{ADVICE_MAX_CHARS} 字之间，目标 {ADVICE_TARGET_CHARS} 字；"
+    "不要把第一段立场或第三段追问算进建议字数；"
+    "输出前自行估算字数：不足则补写可执行做法，超出则压缩。"
+)
+
+
+PROFILE_FIELD_ORDER = (
+    ("current_turn_summary", "本轮语义摘要"),
+    ("emotions_feelings", "用户情绪与感受"),
+    ("interaction_details", "具体交往细节"),
+    ("relationship_history", "交往历史"),
 )
 
 
 @dataclass
 class ConditionConfig:
     user_id: str
-    emotion: str
-    position: str  # "tool" | "companion"（DB 列名仍为 position）
+    emotion: str  # "ingroup" | "outgroup"
+    position: str  # "generic" | "contingent"
     is_anger: bool
-    bot_type: str  # 与 position 同值，便于 API 语义
+    advice_style: str
+    bot_type: str
 
 
 def format_completion_code(letter: str, number: int) -> str:
@@ -122,35 +193,51 @@ def format_completion_code(letter: str, number: int) -> str:
 
 
 def emotion_to_iv(emotion: str) -> int:
-    if emotion == "anger":
-        return EMOTION_ANGER
-    if emotion == "neutral":
-        return EMOTION_NEUTRAL
-    raise ValueError(f"未知情绪条件：{emotion}")
+    if is_ingroup(emotion):
+        return EMOTION_INGROUP
+    if is_outgroup(emotion):
+        return EMOTION_OUTGROUP
+    raise ValueError(f"未知组别条件：{emotion}")
 
 
 def position_to_iv(position: str) -> int:
-    if position == "tool":
-        return BOT_TOOL
-    if position == "companion":
-        return BOT_COMPANION
-    raise ValueError(f"未知 bot 类型条件：{position}")
+    if is_generic_advice(position):
+        return ADVICE_GENERIC
+    if is_contingent_advice(position):
+        return ADVICE_CONTINGENT
+    raise ValueError(f"未知建议风格条件：{position}")
 
 
 def emotion_from_iv(emotion_iv: int) -> str:
-    if emotion_iv == EMOTION_ANGER:
-        return "anger"
-    if emotion_iv == EMOTION_NEUTRAL:
-        return "neutral"
-    raise ValueError(f"未知情绪编码：{emotion_iv}")
+    if emotion_iv == EMOTION_INGROUP:
+        return "ingroup"
+    if emotion_iv == EMOTION_OUTGROUP:
+        return "outgroup"
+    raise ValueError(f"未知组别编码：{emotion_iv}")
 
 
 def position_from_iv(position_iv: int) -> str:
-    if position_iv == BOT_TOOL:
-        return "tool"
-    if position_iv == BOT_COMPANION:
-        return "companion"
-    raise ValueError(f"未知 bot 类型编码：{position_iv}")
+    if position_iv == ADVICE_GENERIC:
+        return "generic"
+    if position_iv == ADVICE_CONTINGENT:
+        return "contingent"
+    raise ValueError(f"未知建议风格编码：{position_iv}")
+
+
+def is_ingroup(emotion: str) -> bool:
+    return emotion == "ingroup"
+
+
+def is_outgroup(emotion: str) -> bool:
+    return emotion == "outgroup"
+
+
+def is_generic_advice(position: str) -> bool:
+    return position == "generic"
+
+
+def is_contingent_advice(position: str) -> bool:
+    return position == "contingent"
 
 
 def condition_from_session(
@@ -165,72 +252,144 @@ def condition_from_session(
         user_id=completion_code,
         emotion=emotion,
         position=position,
-        is_anger=emotion == "anger",
+        is_anger=is_ingroup(emotion),
+        advice_style=position,
         bot_type=position,
     )
 
 
-def get_system_prompt(emotion: str, ai_round: int) -> str:
-    """ai_round 为即将生成的 AI 回复轮次（1–6）。仅按 emotion 分支。"""
-    if ai_round >= MAX_AI_ROUNDS:
-        return _build_final_system_prompt(emotion)
-    return _build_early_system_prompt(emotion)
+def group_prompt_for(emotion: str, advice_style: str) -> str:
+    key = (emotion, advice_style)
+    if key not in GROUP_PROMPTS:
+        raise ValueError(f"未知组别组合：{emotion} × {advice_style}")
+    return GROUP_PROMPTS[key]
+
+
+def elicitation_block(advice_style: str = "generic", ai_round: int = 1) -> str:
+    """Generic 使用通用追问；contingent 才允许结合对话与画像追问。"""
+    if is_contingent_advice(advice_style):
+        return CONTINGENT_ELICITATION_GUIDE
+    if not 1 <= ai_round <= len(GENERIC_ELICITATION_QUESTIONS):
+        raise ValueError(
+            f"generic 追问轮次必须在 1–{len(GENERIC_ELICITATION_QUESTIONS)} 之间：{ai_round}"
+        )
+    question = GENERIC_ELICITATION_QUESTIONS[ai_round - 1]
+    return f"{GENERIC_ELICITATION_GUIDE}\n【本轮固定追问】{question}"
+
+
+def get_system_prompt(
+    emotion: str,
+    advice_style: str,
+    user_profile: str | dict | None = None,
+    ai_round: int = 1,
+) -> str:
+    """
+    拼接：
+      ROLE + RESPONSE_REQUIREMENTS
+      + 本组完整提示词（四选一）
+      + 共用 elicitation（开放引导）
+      + （仅 contingent）【用户画像】
+    """
+    base = f"{ROLE_PROMPT}\n\n{RESPONSE_REQUIREMENTS}"
+    group = group_prompt_for(emotion, advice_style)
+    if is_generic_advice(advice_style):
+        group = f"{group}\n\n{generic_round_script(emotion, ai_round)}"
+    prompt = f"{base}\n\n{group}\n\n{elicitation_block(advice_style, ai_round)}"
+    if is_contingent_advice(advice_style):
+        prompt = f"{prompt}\n\n{CONTINGENT_ADVICE_LENGTH_RULE}"
+        profile_block = format_user_profile_block(user_profile)
+        if profile_block:
+            prompt = f"{prompt}\n\n{profile_block}"
+    return prompt
 
 
 def get_max_reply_tokens(ai_round: int) -> int:
-    """第 6 轮使用 MAX_REPLY_TOKENS_FINAL，允许更长输出（对应 350 字）。"""
-    if ai_round >= MAX_AI_ROUNDS:
-        return MAX_REPLY_TOKENS_FINAL
+    del ai_round
     return MAX_REPLY_TOKENS
 
 
-ANGER_TEMPERATURE = 0.4
-NEUTRAL_TEMPERATURE = 0.4
-FINAL_ROUND_TEMPERATURE = 0.2
+GENERIC_TEMPERATURE = 0.3
+CONTINGENT_TEMPERATURE = 0.3
 
 
-def get_temperature(emotion: str, ai_round: int) -> float:
-    """第 6 轮降低 temperature，便于原样输出固定标题。"""
-    if ai_round >= MAX_AI_ROUNDS:
-        return FINAL_ROUND_TEMPERATURE
-    return ANGER_TEMPERATURE if emotion == "anger" else NEUTRAL_TEMPERATURE
+def get_temperature(emotion: str, ai_round: int, advice_style: str = "generic") -> float:
+    del emotion
+    del ai_round
+    return CONTINGENT_TEMPERATURE if is_contingent_advice(advice_style) else GENERIC_TEMPERATURE
 
 
-def _build_early_system_prompt(emotion: str) -> str:
-    base = f"{ROLE_PROMPT}\n\n{RESPONSE_REQUIREMENTS_EARLY}"
-    condition = _early_condition_block(emotion)
-    return f"{base}\n\n{condition}"
+def generic_round_script(emotion: str, ai_round: int) -> str:
+    """返回 generic 组指定轮次的固定正文脚本（轮次从 1 开始）。"""
+    scripts = GENERIC_ROUND_SCRIPTS.get(emotion)
+    if scripts is None:
+        raise ValueError(f"未知组别条件：{emotion}")
+    if not 1 <= ai_round <= len(scripts):
+        raise ValueError(f"generic 轮次必须在 1–{len(scripts)} 之间：{ai_round}")
+    stance, advice = scripts[ai_round - 1]
+    lines = [f"【本轮固定脚本：第 {ai_round} 轮】", f"第一段：{stance}", "第二段："]
+    lines.extend(f"- **{title}**：{body}" for title, body in advice)
+    lines.append(
+        "第一段开头只允许生成一句自然、宽泛的通用衔接套话，随后使用以上第一段脚本。"
+        "衔接句可以适度变化，但不得根据用户输入内容进行调整，也不得加入具体事实、个性化信息、新分析或新建议。"
+        "建议标题、数量、顺序和核心含义必须保持不变。衔接调整只能基于宽泛的问题类别，"
+        "不得引用、转述或暗示用户提到的具体事实、原始措辞或个人特征。"
+    )
+    return "\n".join(lines)
 
 
-def _build_final_system_prompt(emotion: str) -> str:
-    base = f"{ROLE_PROMPT}\n\n{RESPONSE_REQUIREMENTS_FINAL}"
-    condition = _final_condition_block(emotion)
-    return f"{base}\n\n{condition}"
+def format_user_profile_block(user_profile: str | dict | None) -> str:
+    data = _coerce_profile_dict(user_profile)
+    if not data:
+        return ""
+    lines: list[str] = ["【用户画像】"]
+    for key, label in PROFILE_FIELD_ORDER:
+        value = data.get(key)
+        rendered = _render_profile_value(value)
+        if rendered:
+            lines.append(f"{label}：{rendered}")
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
 
 
-def _early_condition_block(emotion: str) -> str:
-    if emotion == "anger":
-        return f"{ANGER_EMOTION_EARLY}{GUIDANCE_EARLY}"
-    return f"{NEUTRAL_ACK_EARLY}{GUIDANCE_EARLY}"
-    # 旧版（含 stance）保留对照：
-    # if emotion == "anger" and position == "aligned":
-    #     return f"{ANGER_EMOTION_EARLY}{ALIGNED_STANCE_EARLY}{GUIDANCE_EARLY}"
-    # if emotion == "neutral" and position == "aligned":
-    #     return f"{NEUTRAL_ACK_EARLY}{ALIGNED_STANCE_EARLY}{GUIDANCE_EARLY}"
-    # if emotion == "anger" and position == "ambiguous":
-    #     return f"{ANGER_EMOTION_EARLY}{AMBIGUOUS_STANCE_EARLY}{GUIDANCE_EARLY}"
-    # return f"{NEUTRAL_ACK_EARLY}{AMBIGUOUS_STANCE_EARLY}{GUIDANCE_EARLY}"
+_MEMORY_CUE_MAX_CHARS = 22
 
 
-def _final_condition_block(emotion: str) -> str:
-    if emotion == "anger":
-        return ANGER_EMOTION_FINAL
-    return NEUTRAL_ACK_FINAL
-    # 旧版（含 stance）保留对照：
-    # if emotion == "anger" and position == "aligned":
-    #     return f"{ANGER_EMOTION_FINAL}{ALIGNED_STANCE_FINAL}"
-    # if emotion == "neutral" and position == "aligned":
-    #     return f"{NEUTRAL_ACK_FINAL}{ALIGNED_STANCE_FINAL}"
-    # if emotion == "anger" and position == "ambiguous":
-    #     return f"{ANGER_EMOTION_FINAL}{AMBIGUOUS_STANCE_FINAL}"
-    # return f"{NEUTRAL_ACK_FINAL}{AMBIGUOUS_STANCE_FINAL}"
+def memory_cue_from_profile(
+    user_profile: str | dict | None,
+    fallback_user_text: str = "",
+) -> str:
+    """只使用模型生成的本轮语义摘要，避免等待提示摘抄用户原句。"""
+    data = _coerce_profile_dict(user_profile)
+    return _clip_memory_cue(_render_profile_value(data.get("current_turn_summary")))
+
+
+def _clip_memory_cue(text: str) -> str:
+    cleaned = " ".join((text or "").split())
+    if len(cleaned) <= _MEMORY_CUE_MAX_CHARS:
+        return cleaned
+    return f"{cleaned[:_MEMORY_CUE_MAX_CHARS]}…"
+
+
+def _coerce_profile_dict(user_profile: str | dict | None) -> dict:
+    if not user_profile:
+        return {}
+    if isinstance(user_profile, dict):
+        return user_profile
+    try:
+        parsed = json.loads(user_profile)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _render_profile_value(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return "；".join(items)
+    text = str(value).strip()
+    if text in {"", "未知", "无", "null", "None"}:
+        return ""
+    return text

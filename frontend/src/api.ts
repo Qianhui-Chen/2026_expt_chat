@@ -2,14 +2,14 @@ export interface SessionState {
   session_token: number;
   attempt_number: number;
   is_anger: boolean;
-  bot_type: "tool" | "companion";
+  bot_type: "generic" | "contingent";
   completion_code: string;
 }
 
 export interface SessionResponse {
   attempt_number: number;
   is_anger: boolean;
-  bot_type: "tool" | "companion";
+  bot_type: "generic" | "contingent";
   ai_round_count: number;
   chat_finished: boolean;
   experiment_finished: boolean;
@@ -47,6 +47,7 @@ export interface ChatStreamDonePayload {
 
 export interface ChatStreamCallbacks {
   onUserMessage?: (message: ChatMessageDTO) => void;
+  onMemory?: (label: string) => void;
   onThinking?: () => void;
   onToken?: (delta: string) => void;
   onDone?: (payload: ChatStreamDonePayload) => void | Promise<void>;
@@ -193,6 +194,9 @@ export const api = {
             callbacks.onUserMessage?.(userMsg);
             break;
           }
+          case "memory":
+            callbacks.onMemory?.(String(payload.label ?? ""));
+            break;
           case "thinking":
             callbacks.onThinking?.();
             break;
@@ -231,26 +235,25 @@ export function loadSession(): SessionState | null {
     const parsed = JSON.parse(raw) as SessionState;
     return {
       ...parsed,
-      bot_type: normalizeBotType(parsed.bot_type, parsed.completion_code),
+      bot_type: normalizeAdviceStyle(parsed.bot_type, parsed.completion_code),
     };
   } catch {
     return null;
   }
 }
 
-/** 优先用后端 bot_type；缺失时按完成码奇偶推断（奇 tool / 偶 companion） */
-export function normalizeBotType(
+/** 优先用后端 bot_type；缺失时按完成码奇偶推断（奇 generic / 偶 contingent） */
+export function normalizeAdviceStyle(
   botType: string | undefined,
   completionCode: string | undefined
-): "tool" | "companion" {
-  if (botType === "tool" || botType === "companion") {
-    return botType;
-  }
+): "generic" | "contingent" {
+  if (botType === "generic") return "generic";
+  if (botType === "contingent") return "contingent";
   const number = Number.parseInt((completionCode ?? "").slice(1), 10);
   if (Number.isFinite(number)) {
-    return number % 2 === 1 ? "tool" : "companion";
+    return number % 2 === 1 ? "generic" : "contingent";
   }
-  return "tool";
+  return "generic";
 }
 
 export function clearSession() {
@@ -273,7 +276,7 @@ export async function ensureActiveSession(): Promise<SessionState> {
           session_token: existing.session_token,
           attempt_number: data.attempt_number,
           is_anger: data.is_anger,
-          bot_type: normalizeBotType(data.bot_type, data.completion_code),
+          bot_type: normalizeAdviceStyle(data.bot_type, data.completion_code),
           completion_code: data.completion_code,
         };
         saveSession(session);
@@ -287,7 +290,7 @@ export async function ensureActiveSession(): Promise<SessionState> {
       } else {
         return {
           ...existing,
-          bot_type: normalizeBotType(existing.bot_type, existing.completion_code),
+          bot_type: normalizeAdviceStyle(existing.bot_type, existing.completion_code),
         };
       }
     }
@@ -296,7 +299,7 @@ export async function ensureActiveSession(): Promise<SessionState> {
   const started = await api.startSession();
   const normalized: SessionState = {
     ...started,
-    bot_type: normalizeBotType(started.bot_type, started.completion_code),
+    bot_type: normalizeAdviceStyle(started.bot_type, started.completion_code),
   };
   saveSession(normalized);
   return normalized;

@@ -33,21 +33,23 @@ class SessionStartTests(unittest.TestCase):
 
         if letter == "A":
             self.assertEqual(session.emotion, 0)
-            self.assertEqual(condition.emotion, "anger")
+            self.assertEqual(condition.emotion, "ingroup")
             self.assertTrue(condition.is_anger)
         else:
             self.assertEqual(session.emotion, 1)
-            self.assertEqual(condition.emotion, "neutral")
+            self.assertEqual(condition.emotion, "outgroup")
             self.assertFalse(condition.is_anger)
 
         if number % 2 == 1:
             self.assertEqual(session.position, 0)
-            self.assertEqual(condition.position, "tool")
-            self.assertEqual(condition.bot_type, "tool")
+            self.assertEqual(condition.position, "generic")
+            self.assertEqual(condition.advice_style, "generic")
+            self.assertEqual(condition.bot_type, "generic")
         else:
             self.assertEqual(session.position, 1)
-            self.assertEqual(condition.position, "companion")
-            self.assertEqual(condition.bot_type, "companion")
+            self.assertEqual(condition.position, "contingent")
+            self.assertEqual(condition.advice_style, "contingent")
+            self.assertEqual(condition.bot_type, "contingent")
 
     def test_balanced_assignment_spreads_groups(self):
         with self.Session() as db:
@@ -63,10 +65,10 @@ class SessionStartTests(unittest.TestCase):
             session = UserSession(
                 user_id="213",
                 completion_code="213",
-                emotion=emotion_to_iv("anger"),
-                position=position_to_iv("tool"),
-                emotion_label="anger",
-                position_label="tool",
+                emotion=emotion_to_iv("ingroup"),
+                position=position_to_iv("generic"),
+                emotion_label="ingroup",
+                position_label="generic",
                 attempt_number=1,
             )
             db.add(session)

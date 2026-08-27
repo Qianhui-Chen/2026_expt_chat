@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { ensureActiveSession, loadSession, type SessionState } from "../api";
+import { clearSession, ensureActiveSession, loadSession, type SessionState } from "../api";
 import { INSTRUCTION_COPY, INSTRUCTION_CTA_LABEL } from "../content/instruction";
 import { splitBoldSegments } from "../content/meet";
 import { trackClick, usePageTracking } from "../hooks/usePageTracking";
@@ -26,6 +26,12 @@ export default function InstructionPage() {
 
   useEffect(() => {
     let cancelled = false;
+
+    const params = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
+    if (params.get("reset") === "1") {
+      clearSession();
+      window.location.hash = "#/instruction";
+    }
 
     void ensureActiveSession()
       .then((active) => {
@@ -79,8 +85,8 @@ export default function InstructionPage() {
 
     setNavigating(true);
     try {
-      await trackClick("instruction", "meet-intro");
-      navigate("/meet");
+      await trackClick("instruction", "start-chat");
+      navigate("/chat");
     } finally {
       setNavigating(false);
     }
