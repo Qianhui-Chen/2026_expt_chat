@@ -1,133 +1,41 @@
 # AI 提示词说明
 
-实现位置：`backend/app/conditions.py`  
-Instruction 页展示文案：`frontend/src/content/instruction.ts`（分组前统一说明，不随 A/B 或奇偶变化）  
-MeetYourBot 页展示文案：`frontend/src/content/meet.ts`（按 bot_type 分支，**不进入** AI 系统提示词）
+实现位置：`backend/app/conditions.py`
 
-## 条件分配
+## 可以：四组四套提示词
 
-| 用户 ID | emotion | position（bot_type） | 说明 |
-|---------|---------|----------------------|------|
-| A + 数字 | anger | — | 愤怒组 UI（💢 动画） |
-| B + 数字 | neutral | — | 中性 UI |
-| 奇数 | — | tool | Meet 页展示 Tool 内容 |
-| 偶数 | — | companion | Meet 页展示 Companion 内容 |
+当前已改为 **四套独立 group prompt**，不再把 IV1/IV2 拼成碎片后再组合。
 
-示例：A001 = 愤怒 + tool；B002 = 中性 + companion。
+| 完成码 | 常量 | 含义 |
+|--------|------|------|
+| A 奇数 | `PROMPT_A_GENERIC` | 支持用户 + 通用脚本建议 |
+| A 偶数 | `PROMPT_A_CONTINGENT` | 支持用户 + 个性化建议 |
+| B 奇数 | `PROMPT_B_GENERIC` | 反对用户 + 通用脚本建议 |
+| B 偶数 | `PROMPT_B_CONTINGENT` | 反对用户 + 个性化建议 |
 
-**系统提示词仅按 emotion 分支**；tool / companion 不影响聊天提示词。
-
-## 轮次结构
-
-共 **6 轮 AI 回复**。系统提示词按轮次分为两套：
-
-| 轮次 | 总体要求 | 情绪/复述 | 引导/建议 |
-|------|----------|-----------|-----------|
-| 第 1–5 轮 | `RESPONSE_REQUIREMENTS_EARLY` | early 版 | `GUIDANCE_EARLY` |
-| 第 6 轮 | `RESPONSE_REQUIREMENTS_FINAL` | final 版 | 固定 (a)–(d) 标题 + 「具体做法：」展开 |
-
-### 拼接公式（当前）
+## 拼接规则（`get_system_prompt`）
 
 ```
-第 1–5 轮：
-  ROLE_PROMPT + RESPONSE_REQUIREMENTS_EARLY
-  + [ANGER_EMOTION_EARLY 或 NEUTRAL_ACK_EARLY]
-  + GUIDANCE_EARLY
-
-第 6 轮：
-  ROLE_PROMPT + RESPONSE_REQUIREMENTS_FINAL
-  + [ANGER_EMOTION_FINAL 或 NEUTRAL_ACK_FINAL]
+ROLE_PROMPT
++ RESPONSE_REQUIREMENTS
++ GROUP_PROMPTS[(emotion, advice_style)]   ← 四选一
++ ELICITATION_GUIDE（contingent 围绕情绪、互动细节与交往历史自然追问；generic 使用固定追问）
++ （仅 contingent）【用户画像】
 ```
 
-立场（aligned / ambiguous）模块已在代码中注释停用，不再拼入提示词。
+## 输出三段
 
-第 6 轮 `(a)–(d)` 标题文本定义在 `FINAL_ROUND_ITEMS_LITERAL`，必须在回复中**原样复制**；每条标题后另起一行以「具体做法：」展开（每条展开 ≤ 60 字）。
+1. **立场回应**（支持 or 反对；不含建议清单）  
+2. **建议**（generic 用四条 bullet 列表；contingent 用 130–150 字的连贯段落结合画像）  
+3. **追问**（可自然多问，但必须同一行同一段；后端会合并换行）
 
----
+段间空一行。
 
-## 共用模块
+contingent 组承接用户内容时只使用画像抽取阶段生成的【本轮语义摘要】，不向正式回复暴露 `key_quotes`；回复采用「你提到，……」等无引号转述形式，禁止逐字复制用户原句。转述不得改变原意或补充未提及的信息。
 
-### ROLE_PROMPT
+contingent 用户画像包含情绪与感受、具体交往细节及交往历史；不抽取或使用用户性格、对方性格以及语言表达／沟通习惯。
 
-```
-【角色】你是一个专业的咨询师，针对以下场景，给出他们可靠的沟通意见来应对人际交往问题。
-【场景】在过去半年的时间里，被试经历过在和朋友或同学的沟通过程中出现信息、意图未被理解，从而导致沟通不顺畅的情境
-```
+generic 组在每轮开头生成一句措辞可适度变化的宽泛对话式套话：A 组采用支持性表达，B 组采用多立场思考表达，随后衔接对应轮次的固定脚本。用户原文与历史消息不会进入 generic 正文生成上下文，因此套话不会根据、引用或转述用户内容，也不会利用具体事实、措辞和个人特征。
 
-### RESPONSE_REQUIREMENTS_EARLY（第 1–5 轮）
 
-- 使用中文；单次回复 ≤ 170 字；前五轮避免输出建议
-- 每一轮输出都要包含提示词的 2 个部分（情绪/复述 + 引导）
-- 不要回答与角色无关的问题
-- 不要通过人身攻击或脏话表达愤怒
-- 内部区分情绪确认与引导，输出中不得显式呈现模块名称
-
-### RESPONSE_REQUIREMENTS_FINAL（第 6 轮）
-
-- 使用中文；单次回复总字数 ≤ 350 字
-- **固定建议标题**：以下 4 行必须按顺序原样输出，一字不改：
-  - (a) 改变对方对这一矛盾的认知；
-  - (b) 减少由情绪驱动的不良行为；
-  - (c) 建立良性沟通模式，引导对方表达适度的脆弱情绪；
-  - (d) 发掘并强化对方的优势。
-- **展开要求**：每标题行后另起一行，以「具体做法：」开头；可引用对话细节；每条展开 ≤ 60 字
-- **禁止**：改写标题、省略 (a)(b)(c)(d)、在标题行内加入解释
-- 含输出格式示例（见 `FINAL_ROUND_FORMAT_EXAMPLE`）
-- 不要回答与角色无关的问题；不要人身攻击或脏话
-
-### temperature
-
-- 第 1–5 轮：anger / neutral 均为 `0.4`
-- 第 6 轮：统一 `0.2`，便于原样输出固定标题
-
-### GUIDANCE_EARLY（第 1–5 轮）
-
-- 用 1 句话鼓励用户深入反思、分享更多观点、感受和事件经过
-- anger / neutral 两组均会拼接
-
----
-
-## 情绪 / 复述模块（按 emotion 区分）
-
-### ANGER_EMOTION_EARLY（愤怒组，第 1–5 轮）
-
-- 1 句对造成「不愉快」的对象表达不满和愤怒；每句带感叹号
-- 仅表达情绪，不得分析责任归属或对错立场
-
-### ANGER_EMOTION_FINAL（愤怒组，第 6 轮）
-
-- 1 句简短愤怒与情绪支持；不得展开事实分析
-- 以「我建议你可以试试：」作为建议输出的开头
-
-### NEUTRAL_ACK_EARLY（中性组，第 1–5 轮）
-
-- 无共情/安慰，专业克制地重申用户输入，然后导向后续引导
-- 不得认可用户行为合理性或评价对错
-
-### NEUTRAL_ACK_FINAL（中性组，第 6 轮）
-
-- 无共情/安慰，不得表达立场或评价对错
-- 以「根据我们的对话，我建议你可以试试：」作为建议输出的开头
-
----
-
-## 立场模块（已停用）
-
-`ALIGNED_STANCE_*` / `AMBIGUOUS_STANCE_*` 仍以注释形式保留在 `conditions.py`，当前不拼入任何轮次。
-
----
-
-## 字数与 Token 上限
-
-| 轮次 | 字数上限 | max_tokens |
-|------|----------|------------|
-| 第 1–5 轮 | 170 字 | 200 |
-| 第 6 轮 | 350 字 | 500 |
-
----
-
-## 修改提示词后
-
-1. 编辑 `backend/app/conditions.py`
-2. 同步更新本文档 `docs/PROMPTS.md`
-3. 服务器部署：`git pull` → 重启后端（`systemctl restart anger-backend` 或重启 uvicorn）
+改某一组时，只改对应的 `PROMPT_A_*` / `PROMPT_B_*` 常量即可，互不影响。
