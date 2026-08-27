@@ -48,14 +48,19 @@ class ConditionTests(unittest.TestCase):
         contingent = get_system_prompt("outgroup", "contingent")
         self.assertIn("直接反对硬约束", generic)
         self.assertIn("不得在反对立场前添加任何句子", generic)
-        self.assertIn("直接表达与用户不同的判断", contingent)
+        self.assertIn("直接且礼貌地表达与用户不同的判断", contingent)
         self.assertIn("禁止采用先肯定后转折的结构", contingent)
 
     def test_system_prompt_uses_group_block(self):
         prompt = get_system_prompt("ingroup", "generic")
         self.assertIn("A·支持用户 × 通用脚本", prompt)
         self.assertIn("通用对话式衔接", prompt)
-        self.assertIn("不要每轮使用同一句固定表达", prompt)
+        self.assertIn("不超过15个汉字", prompt)
+        self.assertIn("简短、模糊、宽泛的安慰或支持性套话", prompt)
+        self.assertIn("只需提供一般性的安慰或支持", prompt)
+        self.assertIn("不得表现出已经理解用户的具体处境", prompt)
+        self.assertIn("允许适度调整非关键词句表达", prompt)
+        self.assertIn("不得针对、回应、暗示、引用或转述用户提到的具体内容", prompt)
         self.assertIn("不得根据用户输入内容调整", prompt)
         self.assertIn("第二段：", prompt)
         self.assertIn("同一行", prompt)
@@ -85,13 +90,18 @@ class ConditionTests(unittest.TestCase):
         )
         self.assertIn("用户情绪与感受：生气；被忽视", prompt)
         self.assertIn("具体交往细节：对方连续三次没有回应", prompt)
-        self.assertIn("对方只是在自己有空的时候联系你", prompt)
-        self.assertIn("必须使用【本轮语义摘要】", prompt)
+        self.assertIn("【本轮转述开头】按你的描述，", prompt)
+        self.assertIn("紧接【本轮语义摘要】", prompt)
         self.assertIn("必须且只能出现一次", prompt)
-        self.assertIn("二选一", prompt)
         self.assertIn("禁止逐字复制用户原句", prompt)
         self.assertIn("禁止使用引号包裹用户内容", prompt)
         self.assertIn("后来如何发展", prompt)
+
+    def test_contingent_paraphrase_opener_varies_by_round(self):
+        first = get_system_prompt("ingroup", "contingent", ai_round=1)
+        second = get_system_prompt("ingroup", "contingent", ai_round=2)
+        self.assertIn("【本轮转述开头】按你的描述，", first)
+        self.assertIn("【本轮转述开头】从你刚才的表达来看，", second)
 
     def test_memory_cue_only_uses_paraphrased_turn_summary(self):
         profile = {
@@ -120,22 +130,23 @@ class ConditionTests(unittest.TestCase):
     def test_generic_uses_round_specific_script(self):
         first = get_system_prompt("ingroup", "generic", ai_round=1)
         eighth = get_system_prompt("outgroup", "generic", ai_round=8)
-        self.assertIn("听起来确实是一件令人难受的事情", first)
+        self.assertIn("听起来确实是一件有点让人不舒服的事情", first)
         self.assertIn("**暂离冲突**", first)
         self.assertIn("第 8 轮", eighth)
         self.assertIn("这件事未必意味着对方应该承担主要责任", eighth)
         self.assertIn("**寻找误解**", eighth)
 
-    def test_generic_uses_varied_general_bridge_without_personalization(self):
-        prompt = get_system_prompt("ingroup", "generic", ai_round=2)
-        self.assertIn("通用对话式衔接", prompt)
-        self.assertIn("不得回应用户具体的提问类型、事实或推理方向", prompt)
-        self.assertIn("不得复述本轮或历史对话中的具体事实", prompt)
-        self.assertIn("只允许生成一句自然、宽泛的通用衔接套话", prompt)
-        self.assertIn("随后使用以上第一段脚本", prompt)
-        self.assertIn("建议标题、数量、顺序和核心含义必须保持不变", prompt)
-        self.assertIn("不得引用、转述、改写或模仿用户原话", prompt)
-        self.assertIn("不得根据个人特点改变建议", prompt)
+    def test_generic_uses_free_broad_bridge_without_claiming_understanding(self):
+        ingroup = get_system_prompt("ingroup", "generic", ai_round=1)
+        outgroup = get_system_prompt("outgroup", "generic", ai_round=1)
+        self.assertIn("不超过15个汉字", ingroup)
+        self.assertIn("简短、模糊、宽泛的安慰或支持性套话", ingroup)
+        self.assertIn("简短、模糊、宽泛的思考型套话", outgroup)
+        self.assertIn("客观冷静", outgroup)
+        self.assertIn("对立视角、其他解释或不同判断", outgroup)
+        self.assertIn("不得通过增加第二句来延长衔接", ingroup)
+        self.assertIn("不得表现出已经理解用户的具体处境", ingroup)
+        self.assertIn("不得根据用户输入内容进行调整", ingroup)
 
     def test_temperature_depends_on_advice_style(self):
         self.assertEqual(get_temperature("ingroup", 1, "generic"), 0.3)
