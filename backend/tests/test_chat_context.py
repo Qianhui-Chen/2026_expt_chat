@@ -60,7 +60,7 @@ class ChatContextTests(unittest.TestCase):
         self.assertNotIn("我们认识三年了", str(messages))
         self.assertNotIn("他从不回我消息", str(messages))
         self.assertIn("A·支持用户 × 通用脚本", messages[0]["content"])
-        self.assertIn("通用对话式衔接", messages[0]["content"])
+        self.assertIn("不得在脚本前增加任何自由生成的承接句", messages[0]["content"])
         self.assertNotIn("【用户画像】", messages[0]["content"])
 
     def test_contingent_sends_full_history_and_profile(self):

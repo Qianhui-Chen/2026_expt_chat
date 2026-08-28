@@ -54,12 +54,9 @@ class ConditionTests(unittest.TestCase):
     def test_system_prompt_uses_group_block(self):
         prompt = get_system_prompt("ingroup", "generic")
         self.assertIn("A·支持用户 × 通用脚本", prompt)
-        self.assertIn("通用对话式衔接", prompt)
-        self.assertIn("不超过15个汉字", prompt)
-        self.assertIn("简短、模糊、宽泛的安慰或支持性套话", prompt)
-        self.assertIn("只需提供一般性的安慰或支持", prompt)
-        self.assertIn("不得表现出已经理解用户的具体处境", prompt)
-        self.assertIn("允许适度调整非关键词句表达", prompt)
+        self.assertIn("不得在脚本前增加任何自由生成的承接句", prompt)
+        self.assertIn("允许适度调整固定脚本内部的非关键词句表达", prompt)
+        self.assertIn("保持共情、安慰和支持的风格", prompt)
         self.assertIn("不得针对、回应、暗示、引用或转述用户提到的具体内容", prompt)
         self.assertIn("不得根据用户输入内容调整", prompt)
         self.assertIn("第二段：", prompt)
@@ -136,17 +133,17 @@ class ConditionTests(unittest.TestCase):
         self.assertIn("这件事未必意味着对方应该承担主要责任", eighth)
         self.assertIn("**寻找误解**", eighth)
 
-    def test_generic_uses_free_broad_bridge_without_claiming_understanding(self):
+    def test_generic_starts_directly_with_fixed_script(self):
         ingroup = get_system_prompt("ingroup", "generic", ai_round=1)
         outgroup = get_system_prompt("outgroup", "generic", ai_round=1)
-        self.assertIn("不超过15个汉字", ingroup)
-        self.assertIn("简短、模糊、宽泛的安慰或支持性套话", ingroup)
-        self.assertIn("简短、模糊、宽泛的思考型套话", outgroup)
-        self.assertIn("客观冷静", outgroup)
-        self.assertIn("对立视角、其他解释或不同判断", outgroup)
-        self.assertIn("不得通过增加第二句来延长衔接", ingroup)
-        self.assertIn("不得表现出已经理解用户的具体处境", ingroup)
-        self.assertIn("不得根据用户输入内容进行调整", ingroup)
+        self.assertIn("第一段必须直接从以上第一段脚本开始", ingroup)
+        self.assertIn("不得在脚本前增加任何自由生成的承接句", ingroup)
+        self.assertIn("允许对脚本内部的非关键词句做轻微措辞调整", ingroup)
+        self.assertIn("ingroup 保持共情支持风格", ingroup)
+        self.assertIn("第一段必须直接从以上第一段脚本开始", outgroup)
+        self.assertIn("outgroup 保持客观反思风格", outgroup)
+        self.assertNotIn("不超过15个汉字", ingroup)
+        self.assertNotIn("通用对话式衔接", outgroup)
 
     def test_temperature_depends_on_advice_style(self):
         self.assertEqual(get_temperature("ingroup", 1, "generic"), 0.3)
