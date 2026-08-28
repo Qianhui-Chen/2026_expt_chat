@@ -86,6 +86,7 @@ SQLite 默认保存在 `backend/experiment.db`。
 | `emotion_label` | TEXT | 内部用：`ingroup` / `outgroup` |
 | `position_label` | TEXT | 内部用：`generic` / `contingent` |
 | `user_profile` | TEXT | 偶数组结构化用户画像 JSON；奇数组为空 |
+| `fill_date` | DATE | 被试开始填写、创建 session 当天的日期 |
 | `ai_round_count` | INTEGER | AI 回复轮数 |
 | `chat_finished` | INTEGER | 聊天是否结束 |
 | `experiment_finished` | INTEGER | 实验是否完成 |

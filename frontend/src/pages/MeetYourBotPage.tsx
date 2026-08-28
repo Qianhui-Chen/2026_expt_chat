@@ -38,7 +38,7 @@ export default function MeetYourBotPage() {
   const [expanded, setExpanded] = useState(false);
   usePageTracking("meet");
 
-  const isCompanion = session?.bot_type === "companion";
+  const isCompanion = session?.bot_type === "contingent";
   const cardLabel = isCompanion ? MEET_COMPANION_CARD_LABEL : MEET_TOOL_CARD_LABEL;
   const cardImage = isCompanion ? MEET_COMPANION_CARD_IMAGE : MEET_TOOL_CARD_IMAGE;
   const stackVariant = isCompanion ? "companion" : "tool";

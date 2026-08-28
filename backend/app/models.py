@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -24,6 +24,7 @@ class UserSession(Base):
     exit_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     completion_code: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     user_profile: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fill_date: Mapped[date] = mapped_column(Date, default=date.today)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     click_events: Mapped[list["ClickEvent"]] = relationship(back_populates="session")

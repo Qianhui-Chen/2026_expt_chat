@@ -171,7 +171,7 @@ type ChatMessageItem = {
 const INTRO_PROMPT =
   "请用不多于 80 个字描述你经历的事件经过和情绪，并与AI进行分析和讨论；AI会基于你的经历给出对应建议。";
 const MAX_INTRO_LENGTH = 80;
-const FINISH_MODAL_COUNTDOWN_SEC = 5;
+const FINISH_MODAL_COUNTDOWN_SEC = 8;
 // 收到后端生成的语义转述后，至少展示一小段时间再播放已缓存的回复。
 const MEMORY_CUE_PHASE_MS = 1800;
 const MEMORY_CUE_TEMPLATES = [
@@ -277,7 +277,7 @@ export default function ChatPage() {
     void trackClick("chat", "reopen-completion-modal");
   }, []);
 
-  // 第 8 轮结束后：先 5 秒倒计时，再自动弹出实验结束弹窗（仅一次）
+  // 第 8 轮结束后：先 8 秒倒计时，再自动弹出实验结束弹窗（仅一次）
   useEffect(() => {
     if (!chatFinished || autoOpenedForFinishRef.current) return;
 

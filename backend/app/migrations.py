@@ -139,6 +139,24 @@ def run_migrations() -> None:
             )
         if "user_profile" not in columns:
             conn.execute(text("ALTER TABLE user_sessions ADD COLUMN user_profile TEXT"))
+        if "fill_date" not in columns:
+            conn.execute(text("ALTER TABLE user_sessions ADD COLUMN fill_date DATE"))
+            if dialect == "sqlite":
+                conn.execute(
+                    text(
+                        "UPDATE user_sessions SET fill_date = DATE(created_at) "
+                        "WHERE fill_date IS NULL"
+                    )
+                )
+            else:
+                conn.execute(
+                    text(
+                        "UPDATE user_sessions SET fill_date = CAST(created_at AS DATE) "
+                        "WHERE fill_date IS NULL"
+                    )
+                )
+            if dialect == "postgresql":
+                conn.execute(text("ALTER TABLE user_sessions ALTER COLUMN fill_date SET NOT NULL"))
 
         columns = _table_columns(inspect(conn), "user_sessions")
         if "emotion_label" not in columns and "emotion" in columns:
