@@ -42,14 +42,14 @@ class SessionStartTests(unittest.TestCase):
 
         if number % 2 == 1:
             self.assertEqual(session.position, 0)
-            self.assertEqual(condition.position, "generic")
-            self.assertEqual(condition.advice_style, "generic")
-            self.assertEqual(condition.bot_type, "generic")
+            self.assertEqual(condition.position, "early_advice")
+            self.assertEqual(condition.advice_style, "early_advice")
+            self.assertEqual(condition.bot_type, "early_advice")
         else:
             self.assertEqual(session.position, 1)
-            self.assertEqual(condition.position, "contingent")
-            self.assertEqual(condition.advice_style, "contingent")
-            self.assertEqual(condition.bot_type, "contingent")
+            self.assertEqual(condition.position, "late_advice")
+            self.assertEqual(condition.advice_style, "late_advice")
+            self.assertEqual(condition.bot_type, "late_advice")
 
     def test_balanced_assignment_spreads_groups(self):
         with self.Session() as db:
@@ -66,9 +66,9 @@ class SessionStartTests(unittest.TestCase):
                 user_id="213",
                 completion_code="213",
                 emotion=emotion_to_iv("ingroup"),
-                position=position_to_iv("generic"),
+                position=position_to_iv("early_advice"),
                 emotion_label="ingroup",
-                position_label="generic",
+                position_label="early_advice",
                 attempt_number=1,
             )
             db.add(session)

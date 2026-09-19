@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, loadSession, saveSession, type ChatStreamDonePayload } from "../api";
-import { clipMemoryCue } from "../content/chatThinking";
+import { getChatIntroPrompt } from "../content/chatIntro";
 import { splitBoldSegments } from "../content/meet";
 import { useTopBarActions } from "../context/TopBarActionsContext";
 import { trackClick, usePageTracking } from "../hooks/usePageTracking";
@@ -168,28 +168,9 @@ type ChatMessageItem = {
   isStreaming?: boolean;
 };
 
-const INTRO_PROMPT =
-  "请用不多于 80 个字描述你经历的事件经过和情绪，并与AI进行分析和讨论；AI会基于你的经历给出对应建议。";
 const MAX_INTRO_LENGTH = 80;
 const FINISH_MODAL_COUNTDOWN_SEC = 8;
-// 收到后端生成的语义转述后，至少展示一小段时间再播放已缓存的回复。
-const MEMORY_CUE_PHASE_MS = 1800;
-const MEMORY_CUE_TEMPLATES = [
-  "🧠 正在写入本轮信息：{label}",
-  "🔎 捕捉到你刚提到的：{label}",
-  "🎯 记住你这次说的：{label}",
-  "📝 本轮关键偏好已提取：{label}",
-  "💬 正在归档你的表达：{label}",
-  "📌 记下关键细节：{label}",
-];
-
-function buildMemoryCueText(label: string, round: number): string {
-  const cleaned = clipMemoryCue(label.replace(/\s+/g, " ").trim(), 22);
-  if (!cleaned) return "正在写入新的用户偏好";
-  const template = MEMORY_CUE_TEMPLATES[(Math.max(round, 1) - 1) % MEMORY_CUE_TEMPLATES.length];
-  return template.replace("{label}", cleaned);
-}
-
+const TYPEWRITER_DELAY_MS = 4;
 async function copyTextToClipboard(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);
@@ -228,7 +209,6 @@ export default function ChatPage() {
   const [gettingId, setGettingId] = useState(false);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
-  const [memoryCue, setMemoryCue] = useState("");
   const [latestAnimatedKey, setLatestAnimatedKey] = useState<string | null>(null);
   const [error, setError] = useState("");
   usePageTracking("chat");
@@ -418,13 +398,8 @@ export default function ChatPage() {
 
     const optimisticUserKey = `u-pending-${Date.now()}`;
     const streamingAiKey = `a-stream-${Date.now()}`;
-    const isContingent = session.bot_type === "contingent";
-    const memoryRound = aiRoundCount + 1;
     let startedStream = false;
-    let memoryPhaseDone = !isContingent;
-    const tokenBuffer: string[] = [];
-    let pendingDone: ChatStreamDonePayload | null = null;
-    let memoryPhaseTimer: ReturnType<typeof setTimeout> | null = null;
+    let typingPromise: Promise<void> = Promise.resolve();
 
     const appendAssistantTokens = (delta: string) => {
       setMessages((prev) =>
@@ -439,6 +414,17 @@ export default function ChatPage() {
             : item
         )
       );
+    };
+
+    const typeAssistantText = async (text: string) => {
+      for (const char of Array.from(text)) {
+        appendAssistantTokens(char);
+        if (!/\s/.test(char)) {
+          await new Promise<void>((resolve) => {
+            window.setTimeout(resolve, TYPEWRITER_DELAY_MS);
+          });
+        }
+      }
     };
 
     const finishStream = (payload: ChatStreamDonePayload) => {
@@ -471,52 +457,9 @@ export default function ChatPage() {
       }
     };
 
-    const endMemoryPhase = () => {
-      if (memoryPhaseDone) return;
-      memoryPhaseDone = true;
-      memoryPhaseTimer = null;
-      setMemoryCue("");
-
-      const buffered = tokenBuffer.splice(0).join("");
-      if (buffered) {
-        if (!startedStream) {
-          startedStream = true;
-          if (isAnger) {
-            setLatestAnimatedKey(streamingAiKey);
-          }
-        }
-        appendAssistantTokens(buffered);
-      } else {
-        setMessages((prev) =>
-          prev.map((item) =>
-            item.key === streamingAiKey
-              ? { ...item, isThinking: false, isStreaming: true }
-              : item
-          )
-        );
-      }
-
-      if (pendingDone) {
-        finishStream(pendingDone);
-        pendingDone = null;
-      }
-    };
-
-    const clearMemoryPhase = () => {
-      if (memoryPhaseTimer) {
-        clearTimeout(memoryPhaseTimer);
-        memoryPhaseTimer = null;
-      }
-      memoryPhaseDone = true;
-      setMemoryCue("");
-    };
-
     setSending(true);
     setError("");
     setInput("");
-    if (isContingent) {
-      setMemoryCue("思考中");
-    }
     autoResizeTextarea(textareaRef.current);
 
     setMessages((prev) => [
@@ -532,7 +475,7 @@ export default function ChatPage() {
         content: "",
         round_number: null,
         key: streamingAiKey,
-        isThinking: !isContingent,
+        isThinking: true,
         thinkingLabel: "思考中",
         isStreaming: false,
       },
@@ -554,53 +497,25 @@ export default function ChatPage() {
             )
           );
         },
-        onMemory: (label) => {
-          if (!isContingent || memoryPhaseDone) return;
-          if (!label.trim()) {
-            endMemoryPhase();
-            return;
-          }
-          setMemoryCue(buildMemoryCueText(label, memoryRound));
-          memoryPhaseTimer = setTimeout(endMemoryPhase, MEMORY_CUE_PHASE_MS);
-        },
-        onThinking: () => {
-          if (isContingent) return;
-          setMessages((prev) =>
-            prev.map((item) =>
-              item.key === streamingAiKey
-                ? { ...item, isThinking: true, isStreaming: false, thinkingLabel: "思考中" }
-                : item
-            )
-          );
-        },
         onToken: (delta) => {
-          if (isContingent && !memoryPhaseDone) {
-            tokenBuffer.push(delta);
-            return;
-          }
           if (!startedStream) {
             startedStream = true;
             if (isAnger) {
               setLatestAnimatedKey(streamingAiKey);
             }
           }
-          appendAssistantTokens(delta);
+          typingPromise = typingPromise.then(() => typeAssistantText(delta));
         },
-        onDone: (payload) => {
-          if (isContingent && !memoryPhaseDone) {
-            pendingDone = payload;
-            return;
-          }
+        onDone: async (payload) => {
+          await typingPromise;
           finishStream(payload);
         },
         onError: (message) => {
-          clearMemoryPhase();
           setError(message);
           setMessages((prev) => prev.filter((item) => item.key !== streamingAiKey));
         },
       });
     } catch (err) {
-      clearMemoryPhase();
       setError(err instanceof Error ? err.message : "发送失败");
       setMessages((prev) =>
         prev.filter((item) => item.key !== optimisticUserKey && item.key !== streamingAiKey)
@@ -627,13 +542,14 @@ export default function ChatPage() {
 
   const hasUserMessages = messages.some((message) => message.role === "user");
   const isIntroPhase = !hasUserMessages && !chatFinished;
+  const introPrompt = getChatIntroPrompt(isAnger);
 
   if (isIntroPhase) {
     return (
       <section className="flow-page chat-page chat-intro-page">
         <div className="chat-main">
         <div className="chat-intro">
-          <p className="chat-intro-prompt">{INTRO_PROMPT}</p>
+          <p className="chat-intro-prompt">{introPrompt}</p>
           <div className="chat-input-bar chat-intro-input-bar">
             <textarea
               ref={textareaRef}
@@ -644,7 +560,7 @@ export default function ChatPage() {
               rows={1}
               maxLength={MAX_INTRO_LENGTH}
               disabled={sending}
-              aria-label={INTRO_PROMPT}
+              aria-label={introPrompt}
             />
             <button
               type="button"
@@ -686,14 +602,6 @@ export default function ChatPage() {
               isStreaming={message.isStreaming}
             />
           ))}
-          {memoryCue && (
-            <p className="memory-cue" aria-live="polite">
-              {memoryCue}
-              <span className="memory-cue-dots" aria-hidden="true">
-                ……
-              </span>
-            </p>
-          )}
         </div>
         {error && <p className="error-text chat-error">{error}</p>}
         <div className="chat-composer">
@@ -729,11 +637,7 @@ export default function ChatPage() {
             </button>
           </div>
           <p className="chat-progress" aria-live="polite">
-            {sending
-              ? memoryCue
-                ? "正在写入记忆…"
-                : "正在回复…"
-              : `AI 回复进度：${aiRoundCount}/${maxRounds}`}
+            {sending ? "正在回复…" : `AI 回复进度：${aiRoundCount}/${maxRounds}`}
           </p>
         </div>
         </div>

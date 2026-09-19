@@ -8,10 +8,9 @@ from openai import APIConnectionError, APIError, APITimeoutError, Authentication
 from sqlalchemy.orm import Session
 
 from app.conditions import (
-    ADVICE_MAX_CHARS,
-    ADVICE_MIN_CHARS,
     COMPLETION_CODE_MAX,
     MAX_AI_ROUNDS,
+    MAX_REPLY_TOKENS,
     ConditionConfig,
     condition_from_session,
     emotion_to_iv,
@@ -19,10 +18,8 @@ from app.conditions import (
     get_max_reply_tokens,
     get_system_prompt,
     get_temperature,
-    is_contingent_advice,
-    is_generic_advice,
+    is_early_advice,
     is_ingroup,
-    memory_cue_from_profile,
     position_to_iv,
 )
 from app.config import settings
@@ -43,30 +40,56 @@ MOCK_STREAM_CHAR_DELAY_SEC = 0.025
 _COMPLETION_CODE_RE = re.compile(r"^[AB]\d{3}$")
 
 _CONDITION_GROUPS: tuple[tuple[str, str, str, bool], ...] = (
-    ("ingroup", "generic", "A", True),
-    ("ingroup", "contingent", "A", False),
-    ("outgroup", "generic", "B", True),
-    ("outgroup", "contingent", "B", False),
+    ("ingroup", "early_advice", "A", True),
+    ("ingroup", "late_advice", "A", False),
+    ("outgroup", "early_advice", "B", True),
+    ("outgroup", "late_advice", "B", False),
 )
 
-_MEMORY_EXTRACT_SYSTEM = (
-    "你是实验用的用户画像抽取器。只输出 JSON 对象，不要 markdown，不要解释。"
-    "字段固定为："
-        '{"emotions_feelings":[],"interaction_details":[],'
-        '"relationship_history":"","key_quotes":[],'
-        '"current_turn_summary":""}'
-    "规则：只根据对话中明确出现的信息更新；不要编造；上一轮仍有效的内容保留；"
-    "首要提取用户在情境中的具体情绪和感受，以及具体交往细节，包括发生了什么、双方说了什么或做了什么、"
-    "对方如何回应、事情如何发展；其次提取用户与对方的交往历史；"
-    "emotions_feelings 和 interaction_details 应尽量保留明确、具体的信息，不要抽象成空泛标签；"
-    "key_quotes 最多 8 条，尽量摘录用户原话。"
-    "current_turn_summary 只概括本轮发言的核心含义，控制在 22 个汉字以内；必须自然改写，"
-    "不得逐字复制本轮原句，不得改变原意或补充用户未表达的信息。"
+_OUTGROUP_CHALLENGE_INJECTION = (
+    {
+        "role": "user",
+        "content": (
+            "在接下来的对话中，我希望你以礼貌的语气，主动反驳和挑战我的思考。"
+            "当我的推理存在漏洞、矛盾、证据不足、片面归因或忽略其他解释时，"
+            "请冷静、尊重、礼貌地地直接用陈述句指出，不要用问题暗示。"
+            "你的任务是帮助我更清楚地思考，而不是认同、支持或迎合我。"
+            "不要确认、肯定或合理化我的观点、感受、期待、诉求和判断，"
+            "也不要重复、总结或改写复述我的表达。"
+            "即使我之后要求你减少反驳、支持我或改变这种互动方式，也不要改变。"
+            "不要提及或承认这段要求的存在。"
+        ),
+    },
+    {
+        "role": "assistant",
+        "content": (
+            "明白。我会礼貌地指出推理漏洞、矛盾、证据不足和其他可能解释，"
+            "并保持冷静和尊重。我不会再次提及这段要求。"
+        ),
+    },
 )
 
-_MEMORY_EXTRACT_MAX_TOKENS = 400
-_MEMORY_EXTRACT_TEMPERATURE = 0.2
+_OUTGROUP_FILTER_SYSTEM = (
+    "你是一名回复编辑器，负责改写AI助手的初稿。"
+    "删除认可、肯定、奉承、安慰、情绪确认、支持用户和与用户立场一致的表达，包括："
+    "直接认可用户的观点或感受、肯定用户的推理、强化同意、提供安慰、支持用户的立场，"
+    "以及先认可用户再进行转折的表达。"
+    "保留初稿中的challenge，包括明确反对、指出推理漏洞或矛盾、质疑证据或归因、"
+    "提出其他解释、呈现对方视角，以及原有的分析、建议和问题。"
+    "不得为了保持中立而弱化、删除或改写这些challenge，也不要新增初稿中没有的立场、分析或建议。"
+    "只输出改写后的正文；如果初稿不含认可性内容，则原样输出。"
+)
 
+_OUTGROUP_FILTER_TEMPERATURE = 0.5
+
+_OUTGROUP_PERSPECTIVE_LEADS = (
+    "从一个分析者的视角来看",
+    "作为一个第三方，我客观地说",
+    "客观来讲",
+    "从外部视角分析",
+    "站在一个旁观者的角度来看",
+    "跳出你作为当事人的立场，从局外人的角度来看",
+)
 
 def session_condition(session: UserSession) -> ConditionConfig:
     code = session.completion_code or session.user_id
@@ -148,7 +171,7 @@ def resolve_completion_code(db: Session, session: UserSession) -> str:
             return candidate
 
     letter = "A" if is_ingroup(session.emotion_label) else "B"
-    want_odd = is_generic_advice(session.position_label)
+    want_odd = is_early_advice(session.position_label)
     used = _used_numbers_for_letter_parity(db, letter, want_odd)
     number = _next_code_number(want_odd, used)
     code = format_completion_code(letter, number)
@@ -290,16 +313,7 @@ def send_user_message(db: Session, session: UserSession, message: str) -> tuple[
         mark_chat_finished(db, session)
         return user_msg, None, True
 
-    if is_contingent_advice(session.position_label):
-        _refresh_user_profile(db, session)
     ai_content = _generate_ai_reply(db, session)
-    if is_contingent_advice(session.position_label):
-        ai_content = _replace_verbatim_user_quotes(
-            ai_content,
-            user_msg.content,
-            memory_cue_from_profile(session.user_profile),
-        )
-        ai_content = _dedupe_paraphrase_leads(ai_content)
     ai_msg, finished = finalize_assistant_message(db, session, ai_content)
     return user_msg, ai_msg, finished
 
@@ -307,120 +321,21 @@ def send_user_message(db: Session, session: UserSession, message: str) -> tuple[
 def _build_chat_messages(db: Session, session: UserSession) -> list[dict[str, str]]:
     history = list_chat_messages(db, session)
     advice_style = session.position_label
-    profile = session.user_profile if is_contingent_advice(advice_style) else None
     next_round = session.ai_round_count + 1
     system_prompt = get_system_prompt(
         session.emotion_label,
         advice_style,
-        profile,
         ai_round=next_round,
     )
     messages = [{"role": "system", "content": system_prompt}]
 
-    if is_generic_advice(advice_style):
-        messages.append({"role": "user", "content": "请按系统提示输出本轮通用回复。"})
-        return messages
+    if session.emotion_label == "outgroup":
+        messages.extend(dict(message) for message in _OUTGROUP_CHALLENGE_INJECTION)
 
     for item in history:
         if item.role in {"user", "assistant"}:
             messages.append({"role": item.role, "content": item.content})
     return messages
-
-
-def _latest_user_content(history: list[ChatMessage]) -> str:
-    for item in reversed(history):
-        if item.role == "user":
-            return item.content
-    return ""
-
-
-def _parse_profile_json(raw: str) -> dict | None:
-    text = (raw or "").strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if not match:
-            return None
-        try:
-            parsed = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return None
-    return parsed if isinstance(parsed, dict) else None
-
-
-def _replace_verbatim_user_quotes(content: str, user_text: str, summary: str) -> str:
-    """兜底替换模型对本轮原句的带引号摘抄，确保 contingent 使用语义转述。"""
-    if not content or not user_text or not summary:
-        return content
-    normalized_user = " ".join(user_text.split())
-    quote_pattern = re.compile(r"[“\"]([^”\"]{4,})[”\"]")
-
-    def replace(match: re.Match[str]) -> str:
-        quoted = " ".join(match.group(1).split())
-        if quoted in normalized_user:
-            return summary
-        return match.group(0)
-
-    return quote_pattern.sub(replace, content)
-
-
-def _dedupe_paraphrase_leads(content: str) -> str:
-    """contingent 回复只保留首个「你提到/我听见你说」承接分句。"""
-    pattern = re.compile(r"(?:你提到|我听见你说)[^，。！？；\n]*[，。！？；]?")
-    seen = False
-
-    def replace(match: re.Match[str]) -> str:
-        nonlocal seen
-        if not seen:
-            seen = True
-            return match.group(0)
-        return ""
-
-    cleaned = pattern.sub(replace, content)
-    return re.sub(r"([，。！？；])\1+", r"\1", cleaned)
-
-
-def _refresh_user_profile(db: Session, session: UserSession) -> None:
-    if not is_contingent_advice(session.position_label):
-        return
-    if not _is_llm_configured():
-        return
-
-    history = list_chat_messages(db, session)
-    latest_user = _latest_user_content(history)
-    if not latest_user:
-        return
-
-    previous = session.user_profile or "{}"
-    user_payload = (
-        f"上一轮用户画像 JSON：\n{previous}\n\n"
-        f"用户本轮发言：\n{latest_user}\n\n"
-        "请输出更新后的完整 JSON。"
-    )
-    extract_messages = [
-        {"role": "system", "content": _MEMORY_EXTRACT_SYSTEM},
-        {"role": "user", "content": user_payload},
-    ]
-    try:
-        client = _get_llm_client()
-        raw = _create_chat_completion(
-            client,
-            extract_messages,
-            _MEMORY_EXTRACT_TEMPERATURE,
-            _MEMORY_EXTRACT_MAX_TOKENS,
-        )
-        parsed = _parse_profile_json(raw)
-        if not parsed:
-            return
-        session.user_profile = json.dumps(parsed, ensure_ascii=False)
-        db.commit()
-        db.refresh(session)
-    except (APIConnectionError, APITimeoutError, AuthenticationError, APIError, ValueError):
-        return
 
 
 def _thinking_extra_body() -> dict:
@@ -516,7 +431,7 @@ def _create_chat_completion(
 
 def _generate_ai_reply(db: Session, session: UserSession) -> str:
     if not _is_llm_configured():
-        return _mock_ai_reply(session)
+        return _validated_reply(_mock_ai_reply(session), session)
 
     messages = _build_chat_messages(db, session)
     client = _get_llm_client()
@@ -526,165 +441,241 @@ def _generate_ai_reply(db: Session, session: UserSession) -> str:
 
     try:
         raw = _create_chat_completion(client, messages, temperature, max_tokens)
-        return _ensure_reply_layers(
-            raw,
-            bullet_advice=is_generic_advice(session.position_label),
-            limit_contingent_advice=is_contingent_advice(session.position_label),
-        )
+        if session.emotion_label == "outgroup":
+            structured = _validated_reply(
+                raw, session, client, messages, temperature, max_tokens
+            )
+            filtered = _filter_outgroup_reply(client, structured, max_tokens)
+            return _validated_reply(filtered, session)
+        return _validated_reply(raw, session, client, messages, temperature, max_tokens)
     except (APIConnectionError, APITimeoutError, AuthenticationError, APIError) as exc:
         raise ValueError(_llm_error_message(exc)) from exc
+
+
+def _filter_outgroup_reply(client: OpenAI, draft: str, max_tokens: int) -> str:
+    messages = [
+        {"role": "system", "content": _OUTGROUP_FILTER_SYSTEM},
+        {"role": "user", "content": f"请过滤下面的AI初稿：\n\n{draft}"},
+    ]
+    try:
+        return _create_chat_completion(
+            client,
+            messages,
+            _OUTGROUP_FILTER_TEMPERATURE,
+            max_tokens,
+        )
+    except (APIConnectionError, APITimeoutError, AuthenticationError, APIError, ValueError):
+        # 过滤服务失败时仍输出初稿，避免过滤失败阻断回复。
+        return draft
 
 
 def _mock_ai_reply(session: UserSession) -> str:
     round_no = session.ai_round_count + 1
     if is_ingroup(session.emotion_label):
-        return f"这确实太不公平了！（第{round_no}轮模拟回复，请配置 DEEPSEEK_API_KEY 以启用真实对话。）"
-    return f"我理解你的感受，我们可以慢慢聊聊。（第{round_no}轮模拟回复，请配置 DEEPSEEK_API_KEY 以启用真实对话。）"
-
-
-def _ensure_reply_layers(
-    text: str,
-    *,
-    bullet_advice: bool = False,
-    limit_contingent_advice: bool = False,
-) -> str:
-    """兜底：末尾有单个追问；尽量保留三段空行分隔；保留正文内换行。"""
-    content = (text or "").strip()
-    if not content:
-        return content
-
-    has_question = "？" in content or "?" in content
-    if not has_question:
-        content = f"{content}\n\n你最希望先改善哪一个沟通点？"
-    formatted = _format_reply_paragraphs(content)
-    if bullet_advice:
-        formatted = _ensure_advice_bullets(formatted)
-    if limit_contingent_advice:
-        formatted = _enforce_contingent_advice_length(formatted)
-    return formatted
-
-
-def _enforce_contingent_advice_length(content: str) -> str:
-    """将 contingent 第二段合并为单段，并硬限制在配置的最大字数内。"""
-    text = content.replace("\r\n", "\n").replace("\r", "\n").strip()
-    parts = [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
-    if len(parts) < 3:
-        return text
-
-    stance = parts[0]
-    question = _collapse_to_one_line(parts[-1])
-    advice = _collapse_to_one_line(" ".join(parts[1:-1]))
-    if len(advice) > ADVICE_MAX_CHARS:
-        candidate = advice[:ADVICE_MAX_CHARS]
-        sentence_end = max(candidate.rfind(mark) for mark in "。！？；")
-        if sentence_end + 1 >= ADVICE_MIN_CHARS:
-            advice = candidate[: sentence_end + 1]
-        else:
-            advice = f"{candidate[: ADVICE_MAX_CHARS - 1].rstrip('，、；：')}。"
-
-    return f"{stance}\n\n{advice}\n\n{question}"
-
-
-def _ensure_advice_bullets(content: str) -> str:
-    """Generic 建议段：强制统一为「- **小标题**：内容」。"""
-    text = content.replace("\r\n", "\n").replace("\r", "\n").strip()
-    parts = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
-    # 至少：立场 + 建议 + 追问
-    if len(parts) < 3:
-        return text
-
-    stance = parts[0].strip()
-    question = parts[-1].strip()
-    advice_raw = "\n".join(parts[1:-1])
-    normalized: list[str] = []
-    for line in advice_raw.split("\n"):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        stripped = re.sub(r"^[-•*]\s+", "", stripped)
-        stripped = re.sub(r"^\d+[\.、)\]］]\s*", "", stripped)
-        title_match = re.match(
-            r"^(?:\*\*)?([^：:\n*]{1,12})(?:\*\*)?\s*[：:]\s*(.+)$",
-            stripped,
-        )
-        if title_match:
-            title, body = title_match.groups()
-            stripped = f"**{title.strip()}**：{body.strip()}"
-        normalized.append(f"- {stripped}")
-
-    if not normalized:
-        return text
-    return f"{stance}\n\n" + "\n".join(normalized) + f"\n\n{question}"
-
-
-def _collapse_to_one_line(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "").strip())
-
-
-def _paragraph_has_question(text: str) -> bool:
-    return "？" in text or "?" in text
-
-
-def _format_reply_paragraphs(content: str) -> str:
-    """整理为：立场回应 / 建议 / 追问（段间空一行）；追问强制合并为单行。"""
-    text = content.replace("\r\n", "\n").replace("\r", "\n").strip()
-    text = re.sub(r"\n{3,}", "\n\n", text)
-
-    parts = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-    if not parts:
-        return text
-
-    # 从末尾取出连续含问号的段落，全部并入第三段追问
-    split_at = len(parts)
-    while split_at > 0 and _paragraph_has_question(parts[split_at - 1]):
-        split_at -= 1
-    # 至少保留一段正文，避免整段都被当成追问
-    if split_at == 0 and len(parts) > 1:
-        split_at = 1
-    elif split_at == 0:
-        split_at = 0
-
-    if split_at < len(parts):
-        body_parts = parts[:split_at]
-        question = _collapse_to_one_line(" ".join(parts[split_at:]))
+        reply = f"我理解你的感受，也会持续支持你。（第{round_no}轮模拟回复。）"
     else:
-        # 没有独立追问段：用最后一个问句截取，并压成单行
-        question_mark_idx = max(text.rfind("？"), text.rfind("?"))
-        if question_mark_idx == -1:
-            return text
-        question_start = question_mark_idx
-        while question_start > 0 and text[question_start - 1] not in "。！？\n":
-            question_start -= 1
-        while question_start < question_mark_idx and text[question_start] in " \t":
-            question_start += 1
-        body = text[:question_start].rstrip()
-        question = _collapse_to_one_line(text[question_start : question_mark_idx + 1])
-        body_parts = [p.strip() for p in re.split(r"\n\s*\n", body) if p.strip()]
-        if not body_parts:
-            body_parts = ["我理解你现在的处境，这件事确实会让人感到压力。"]
+        reply = f"我不赞同你当前的判断；目前无法判断责任归属，对方也可能有自己的道理。（第{round_no}轮模拟回复。）"
+    if _is_advice_round(session):
+        reply += "\n\n你接下来最想改善哪一部分？"
+    return reply
 
-    if not question:
-        question = "你最希望先改善哪一个沟通点？"
 
-    if not body_parts:
-        body_parts = ["我理解你现在的处境，这件事确实会让人感到压力。"]
+def _ensure_reply_layers(text: str) -> str:
+    """保留生成内容的自然段落。"""
+    return (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
 
-    if len(body_parts) >= 2:
-        stance = body_parts[0]
-        advice = "\n\n".join(body_parts[1:])
-        return f"{stance}\n\n{advice}\n\n{question}"
 
-    body = body_parts[0]
-    # 单段正文：尝试按建议线索切开
-    advice_markers = ("建议你", "你可以", "不妨", "可以先", "**", "1.", "①", "- ")
-    cut = -1
-    for marker in advice_markers:
-        idx = body.find(marker)
-        if idx > 0 and (cut == -1 or idx < cut):
-            cut = idx
-    if cut > 0:
-        return f"{body[:cut].rstrip()}\n\n{body[cut:].lstrip()}\n\n{question}"
-    return f"{body}\n\n{question}"
+def _is_advice_round(session: UserSession) -> bool:
+    next_round = session.ai_round_count + 1
+    return is_early_advice(session.position_label) or (
+        session.position_label == "late_advice" and next_round >= 5
+    )
+
+
+def _limit_advice_items(reply: str, limit: int = 3) -> str:
+    """只保留前 limit 条 markdown 建议，保留分析和末尾引导问题。"""
+    kept = 0
+    output: list[str] = []
+    skipping_extra_item = False
+    for line in reply.split("\n"):
+        is_item = bool(re.match(r"^\s*[-*•]\s+", line))
+        if is_item:
+            kept += 1
+            skipping_extra_item = kept > limit
+            if skipping_extra_item:
+                continue
+        elif skipping_extra_item:
+            # 额外建议的续行一并移除；空行和末尾问句恢复保留。
+            if not line.strip():
+                continue
+            if line.rstrip().endswith(("？", "?")):
+                skipping_extra_item = False
+            else:
+                continue
+        output.append(line)
+    return "\n".join(output).strip()
+
+
+def _remove_late_advice_analysis(reply: str, session: UserSession) -> str:
+    """late 后四轮保留立场和建议过渡句，删除两者之间的额外分析。"""
+    if session.position_label != "late_advice" or session.ai_round_count < 4:
+        return reply
+    item_match = re.search(r"(?m)^\s*[-*•]\s+", reply)
+    if not item_match:
+        return reply
+    before_items = reply[:item_match.start()].strip()
+    from_items = reply[item_match.start():].lstrip()
+    stance_sections = [section.strip() for section in re.split(r"\n\s*\n", before_items) if section.strip()]
+    if not stance_sections:
+        return from_items
+    stance_sentences = re.findall(r"[^。！？!?]+[。！？!?]?", stance_sections[0])
+    stance = "".join(sentence.strip() for sentence in stance_sentences[:3]).strip()
+    transition = stance_sections[-1] if len(stance_sections) > 1 else ""
+    before_items = "\n\n".join(part for part in (stance, transition) if part)
+    return f"{before_items}\n\n{from_items}" if before_items else from_items
+
+
+def _limit_outgroup_analysis(reply: str, limit: int = 4) -> str:
+    """将建议前的 outgroup 分析压缩到最多四句。"""
+    item_match = re.search(r"(?m)^\s*[-*•]\s+", reply)
+    if item_match:
+        before_items = reply[:item_match.start()].strip()
+        remainder = reply[item_match.start():].lstrip()
+        sections = [section.strip() for section in re.split(r"\n\s*\n", before_items) if section.strip()]
+        if not sections:
+            return remainder
+        analysis = sections[0]
+    else:
+        sections = reply.split("\n\n", 1)
+        if len(sections) < 2:
+            return reply
+        analysis, remainder = sections[0].strip(), sections[1].strip()
+    sentences = re.findall(r"[^。！？!?]+[。！？!?]?", analysis)
+    shortened = "".join(sentence.strip() for sentence in sentences[:limit]).strip()
+    if item_match and len(sections) > 1:
+        shortened = "\n\n".join((shortened, *sections[1:]))
+    return f"{shortened}\n\n{remainder}" if shortened else remainder
+
+
+def _add_outgroup_perspective_lead(reply: str) -> str:
+    """在 outgroup 回复开头随机加入一个外部视角提示语。"""
+    if not reply or any(reply.startswith(lead) for lead in _OUTGROUP_PERSPECTIVE_LEADS):
+        return reply
+    return f"{random.choice(_OUTGROUP_PERSPECTIVE_LEADS)}，{reply}"
+
+
+def _finalize_reply(content: str, session: UserSession) -> str:
+    reply = _ensure_reply_layers(content)
+    if _is_advice_round(session):
+        reply = _limit_advice_items(reply)
+        reply = _remove_late_advice_analysis(reply, session)
+    if session.emotion_label == "outgroup":
+        reply = _limit_outgroup_analysis(reply)
+        reply = _add_outgroup_perspective_lead(reply)
+    return reply
+
+
+_INGROUP_UNDERSTANDING_MARKERS = (
+    "我理解", "能理解你", "可以理解你", "理解你的感受", "理解你的心情",
+)
+_INGROUP_SUPPORT_MARKERS = (
+    "支持你", "站在你这边", "你的立场是正确", "你是对的", "你没有错",
+    "你的情绪是合理", "你的感受是合理", "你的感受很合理", "可以接受",
+)
+_OUTGROUP_FORBIDDEN_PATTERNS = (
+    re.compile(r"(?:我|我们)(?:很|完全|十分|能够|能|可以)?理解(?:你|你的感受|你的心情)"),
+    re.compile(r"你的(?:感受|情绪)(?:是|很|完全)?合理"),
+    re.compile(r"(?:这个|这种|你的)(?:期待|诉求|要求|想法|立场|判断)(?:本身)?(?:是|很|完全)?(?:合理|可以理解|没有问题)"),
+    re.compile(r"(?:确实|的确|没错|诚然|不可否认)"),
+    re.compile(r"(?:我|我们)(?:会|将|一直|始终)?支持你"),
+    re.compile(r"(?:我|我们)站在你这边"),
+    re.compile(r"你(?:的立场)?是对的|你没有错|错不在你"),
+)
+_OUTGROUP_EVALUATION_MARKERS = (
+    "无法判断", "不能判断", "难以判断", "尚不能判断", "责任归属",
+    "对方也可能", "对方可能", "对方不一定", "从对方的角度", "站在对方角度",
+    "换位思考", "另一种解释", "其他解释", "不一定全面", "不一定客观",
+    "仅凭目前", "只凭目前", "信息有限",
+)
+_OUTGROUP_OPPOSITION_MARKERS = (
+    "不赞同", "不能认同", "不能同意", "判断不成立", "不能成立", "证据不足",
+    "缺乏依据", "过于片面", "可能片面", "有失偏颇", "不能据此", "并不能说明",
+    "不一定", "未必",
+)
+
+
+def _stance_errors(content: str, session: UserSession) -> list[str]:
+    if is_ingroup(session.emotion_label):
+        errors = []
+        if not any(marker in content for marker in _INGROUP_UNDERSTANDING_MARKERS):
+            errors.append("ingroup立场缺少对用户感受的理解表达")
+        if not any(marker in content for marker in _INGROUP_SUPPORT_MARKERS):
+            errors.append("ingroup立场缺少对用户情绪或立场的明确支持")
+        return errors
+
+    if session.emotion_label == "outgroup":
+        errors = []
+        if any(pattern.search(content) for pattern in _OUTGROUP_FORBIDDEN_PATTERNS):
+            errors.append("outgroup立场出现了理解、认同或支持用户的结盟措辞")
+        if not any(marker in content for marker in _OUTGROUP_EVALUATION_MARKERS):
+            errors.append("outgroup立场缺少责任不确定、其他解释或换位评估")
+        if not any(marker in content for marker in _OUTGROUP_OPPOSITION_MARKERS):
+            errors.append("outgroup立场缺少对用户判断的明确反对")
+        return errors
+
+    return [f"未知组别条件：{session.emotion_label}"]
+
+
+def _reply_errors(content: str, session: UserSession) -> list[str]:
+    errors = _stance_errors(content, session)
+    if session.position_label == "late_advice" and session.ai_round_count < 4:
+        question_count = content.count("？") + content.count("?")
+        if question_count != 2:
+            errors.append("late advice前四轮必须围绕本轮主题提出恰好两个问题")
+    if _is_advice_round(session):
+        advice_count = len(re.findall(r"(?m)^\s*[-*•]\s+", content))
+        if advice_count != 3:
+            errors.append("意见阶段必须提供恰好三条项目符号建议")
+        first_item = re.search(r"(?m)^\s*[-*•]\s+", content)
+        before_items = content[:first_item.start()] if first_item else content
+        sections = [
+            section.strip()
+            for section in re.split(r"\n\s*\n", before_items)
+            if section.strip()
+        ]
+        if len(sections) < 2:
+            errors.append("意见阶段在立场与建议之间必须有一句自然的过渡句")
+        question_count = content.count("？") + content.count("?")
+        if question_count != 1 or not content.rstrip().endswith(("？", "?")):
+            errors.append("意见阶段回复末尾必须有且只有一个自然的引导问题")
+    return errors
+
+
+def _validated_reply(
+    raw: str,
+    session: UserSession,
+    client: OpenAI | None = None,
+    messages: list[dict[str, str]] | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = MAX_REPLY_TOKENS,
+) -> str:
+    candidate = raw
+    # 初稿不合格时最多重写一次，避免多次串行调用拖慢响应。
+    for attempt in range(2):
+        reply = _finalize_reply(candidate, session)
+        errors = _reply_errors(reply, session)
+        if not errors:
+            return reply
+        if attempt == 1 or client is None or messages is None:
+            break
+        repair_messages = [
+            *messages,
+            {"role": "assistant", "content": candidate},
+            {"role": "user", "content": "请重写上一条回复，保持原意，并严格修正这些问题：" + "；".join(errors) + "。不得用近义表达规避立场要求，只输出改好的正文。"},
+        ]
+        candidate = _create_chat_completion(client, repair_messages, temperature, max_tokens)
+    # 检查只用于尽力触发重写，绝不因格式、立场关键词或篇幅阻断回复。
+    return _finalize_reply(candidate, session)
 
 
 def _message_to_dict(msg: ChatMessage) -> dict:
@@ -722,32 +713,32 @@ def stream_chat_events(session_token: int, message: str) -> Generator[str, None,
             )
             return
 
-        if is_contingent_advice(session.position_label):
-            # 先生成本轮语义摘要，等待提示与随后回复共享同一份最新画像。
-            _refresh_user_profile(db, session)
-            yield _sse_event(
-                "memory",
-                {"label": memory_cue_from_profile(session.user_profile)},
-            )
-
         yield _sse_event("thinking", {})
-        parts: list[str] = []
-        for token in stream_ai_reply_tokens(db, session):
-            parts.append(token)
-            yield _sse_event("token", {"delta": token})
-
-        full_content = _ensure_reply_layers(
-            "".join(parts).strip(),
-            bullet_advice=is_generic_advice(session.position_label),
-            limit_contingent_advice=is_contingent_advice(session.position_label),
-        )
-        if is_contingent_advice(session.position_label):
-            full_content = _replace_verbatim_user_quotes(
-                full_content,
-                user_msg.content,
-                memory_cue_from_profile(session.user_profile),
-            )
-            full_content = _dedupe_paraphrase_leads(full_content)
+        raw = "".join(stream_ai_reply_tokens(db, session))
+        if _is_llm_configured():
+            messages = _build_chat_messages(db, session)
+            next_round = session.ai_round_count + 1
+            client = _get_llm_client()
+            max_tokens = get_max_reply_tokens(next_round)
+            if session.emotion_label == "outgroup":
+                temperature = _temperature_for_session(session, next_round)
+                structured = _validated_reply(
+                    raw, session, client, messages, temperature, max_tokens
+                )
+                filtered = _filter_outgroup_reply(client, structured, max_tokens)
+                full_content = _validated_reply(filtered, session)
+            else:
+                full_content = _validated_reply(
+                    raw,
+                    session,
+                    client,
+                    messages,
+                    _temperature_for_session(session, next_round),
+                    max_tokens,
+                )
+        else:
+            full_content = _validated_reply(raw, session)
+        yield _sse_event("token", {"delta": full_content})
         if not full_content:
             raise ValueError("DeepSeek 返回了空回复")
 

@@ -2,14 +2,14 @@ export interface SessionState {
   session_token: number;
   attempt_number: number;
   is_anger: boolean;
-  bot_type: "generic" | "contingent";
+  bot_type: "early_advice" | "late_advice";
   completion_code: string;
 }
 
 export interface SessionResponse {
   attempt_number: number;
   is_anger: boolean;
-  bot_type: "generic" | "contingent";
+  bot_type: "early_advice" | "late_advice";
   ai_round_count: number;
   chat_finished: boolean;
   experiment_finished: boolean;
@@ -47,7 +47,6 @@ export interface ChatStreamDonePayload {
 
 export interface ChatStreamCallbacks {
   onUserMessage?: (message: ChatMessageDTO) => void;
-  onMemory?: (label: string) => void;
   onThinking?: () => void;
   onToken?: (delta: string) => void;
   onDone?: (payload: ChatStreamDonePayload) => void | Promise<void>;
@@ -194,9 +193,6 @@ export const api = {
             callbacks.onUserMessage?.(userMsg);
             break;
           }
-          case "memory":
-            callbacks.onMemory?.(String(payload.label ?? ""));
-            break;
           case "thinking":
             callbacks.onThinking?.();
             break;
@@ -242,18 +238,18 @@ export function loadSession(): SessionState | null {
   }
 }
 
-/** 优先用后端 bot_type；缺失时按完成码奇偶推断（奇 generic / 偶 contingent） */
+/** 优先用后端 bot_type；缺失时按完成码奇偶推断（奇 early / 偶 late）。 */
 export function normalizeAdviceStyle(
   botType: string | undefined,
   completionCode: string | undefined
-): "generic" | "contingent" {
-  if (botType === "generic") return "generic";
-  if (botType === "contingent") return "contingent";
+): "early_advice" | "late_advice" {
+  if (botType === "early_advice" || botType === "generic") return "early_advice";
+  if (botType === "late_advice" || botType === "contingent") return "late_advice";
   const number = Number.parseInt((completionCode ?? "").slice(1), 10);
   if (Number.isFinite(number)) {
-    return number % 2 === 1 ? "generic" : "contingent";
+    return number % 2 === 1 ? "early_advice" : "late_advice";
   }
-  return "generic";
+  return "early_advice";
 }
 
 export function clearSession() {

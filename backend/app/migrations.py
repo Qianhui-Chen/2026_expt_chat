@@ -137,8 +137,6 @@ def run_migrations() -> None:
                     "WHERE completion_code IS NULL AND user_id IS NOT NULL"
                 )
             )
-        if "user_profile" not in columns:
-            conn.execute(text("ALTER TABLE user_sessions ADD COLUMN user_profile TEXT"))
         if "fill_date" not in columns:
             conn.execute(text("ALTER TABLE user_sessions ADD COLUMN fill_date DATE"))
             if dialect == "sqlite":
@@ -232,6 +230,8 @@ def run_migrations() -> None:
                     "WHERE position_label = 'contingent'"
                 )
             )
+            conn.execute(text("UPDATE user_sessions SET position_label = 'early_advice' WHERE position_label = 'generic'"))
+            conn.execute(text("UPDATE user_sessions SET position_label = 'late_advice' WHERE position_label = 'contingent'"))
 
         if dialect == "sqlite":
             if _sqlite_user_id_has_solo_unique(conn):
