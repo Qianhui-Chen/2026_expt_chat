@@ -39,3 +39,4 @@ Thumbs.db
 # Agent / local tooling (optional)
 agent-tools/
 agent-transcripts/
+tmp/

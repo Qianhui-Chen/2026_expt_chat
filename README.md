@@ -10,7 +10,7 @@
 - DeepSeek 驱动聊天
 - A 组愤怒 UI：AI 回复 💢
 - 8 轮结束后倒计时，点击「下一步」弹窗显示完成代码
-- 提示词按组别（ingroup / outgroup）× 建议风格（generic / contingent）分支，见 [docs/PROMPTS.md](docs/PROMPTS.md)
+- 提示词按立场（ingroup / outgroup）× 建议时机（early_advice / late_advice）分支，见 [docs/PROMPTS.md](docs/PROMPTS.md)
 
 ## 项目结构
 
@@ -50,16 +50,27 @@ npm run dev
 
 浏览器打开：http://localhost:5173（默认进入 `#/instruction`）
 
+### Vercel 部署
+
+仓库根目录的 `vercel.json` 会构建 `frontend`，并将 `/api/*` 和 `/health` 转发到 `api/index.py` 中的 FastAPI 应用。Vercel 项目需要配置以下生产环境变量：
+
+- `DEEPSEEK_API_KEY`：DeepSeek API Key。
+- `DATABASE_URL`：持久化 PostgreSQL 连接串。Vercel Functions 不能使用项目内的 SQLite 文件保存正式实验数据。
+- `DEEPSEEK_MODEL`：可选，默认 `deepseek-chat`。
+- `DEEPSEEK_BASE_URL`：可选，默认 `https://api.deepseek.com`。
+
+Vercel 项目的 Root Directory 应保持为仓库根目录。添加或修改环境变量后需要重新部署。
+
 ## 实验条件与完成代码
 
 被试进入说明页时分配完成代码（人数平衡），完成代码示例：
 
-| 完成代码 | emotion（组别） | position / advice_style（建议风格） |
+| 完成代码 | emotion（组别） | position / advice_style（建议时机） |
 |----------|-----------------|-------------------------------------|
-| `A` + 奇数（如 A001） | ingroup | generic |
-| `A` + 偶数（如 A002） | ingroup | contingent |
-| `B` + 奇数（如 B001） | outgroup | generic |
-| `B` + 偶数（如 B002） | outgroup | contingent |
+| `A` + 奇数（如 A001） | ingroup | early_advice |
+| `A` + 偶数（如 A002） | ingroup | late_advice |
+| `B` + 奇数（如 B001） | outgroup | early_advice |
+| `B` + 偶数（如 B002） | outgroup | late_advice |
 
 流程：`#/instruction`（Welcome + 统一说明，无导航栏）→ `#/chat`。聊天结束后，被试在弹窗中复制该代码填写至 Credamo 后测问卷。
 
@@ -82,10 +93,9 @@ SQLite 默认保存在 `backend/experiment.db`。
 | `id` | INTEGER | 会话主键（`session_token`） |
 | `completion_code` | TEXT | 完成代码，如 `A001` |
 | **`emotion`** | **INTEGER** | **组别自变量：0 = ingroup，1 = outgroup** |
-| **`position`** | **INTEGER** | **建议风格：0 = generic，1 = contingent** |
+| **`position`** | **INTEGER** | **建议时机：0 = early_advice，1 = late_advice** |
 | `emotion_label` | TEXT | 内部用：`ingroup` / `outgroup` |
-| `position_label` | TEXT | 内部用：`generic` / `contingent` |
-| `user_profile` | TEXT | 偶数组结构化用户画像 JSON；奇数组为空 |
+| `position_label` | TEXT | 内部用：`early_advice` / `late_advice` |
 | `fill_date` | DATE | 被试开始填写、创建 session 当天的日期 |
 | `ai_round_count` | INTEGER | AI 回复轮数 |
 | `chat_finished` | INTEGER | 聊天是否结束 |
