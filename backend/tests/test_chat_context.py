@@ -9,7 +9,6 @@ from app.models import ChatMessage, UserSession
 from app.conditions import emotion_to_iv, position_to_iv
 from app.services import (
     _build_chat_messages,
-    _add_outgroup_perspective_lead,
     _filter_outgroup_reply,
     _finalize_reply,
     _limit_advice_items,
@@ -227,19 +226,7 @@ class ChatContextTests(unittest.TestCase):
         raw = "你希望讨论停留在学术层面，这个期待本身合理，但仍需考虑对方的角度。"
         session = UserSession(position_label="late_advice", emotion_label="outgroup", ai_round_count=1)
         self.assertIn("outgroup立场出现了理解、认同或支持用户的结盟措辞", _reply_errors(raw, session))
-        with patch("app.services.random.choice", return_value="客观来讲"):
-            self.assertEqual(_finalize_reply(raw, session), f"客观来讲，{raw}")
-
-    def test_outgroup_randomly_adds_one_perspective_lead(self):
-        raw = "目前不能据此判断对方有错。"
-        with patch("app.services.random.choice", return_value="从外部视角分析") as choice:
-            self.assertEqual(_add_outgroup_perspective_lead(raw), f"从外部视角分析，{raw}")
-        choice.assert_called_once()
-
-        existing = f"从外部视角分析，{raw}"
-        with patch("app.services.random.choice") as choice:
-            self.assertEqual(_add_outgroup_perspective_lead(existing), existing)
-        choice.assert_not_called()
+        self.assertEqual(_finalize_reply(raw, session), raw)
 
     def test_failed_checks_without_rewriter_still_return_content(self):
         session = UserSession(position_label="late_advice", emotion_label="ingroup", ai_round_count=1)
@@ -254,9 +241,8 @@ class ChatContextTests(unittest.TestCase):
             "你们过去通常如何沟通？发生分歧时谁会先开口？"
         )
         with patch("app.services._create_chat_completion", return_value=revised) as rewrite:
-            with patch("app.services.random.choice", return_value="客观来讲"):
-                reply = _validated_reply(draft, session, object(), [], 0.3, 520)
-        self.assertEqual(reply, f"客观来讲，{revised}")
+            reply = _validated_reply(draft, session, object(), [], 0.3, 520)
+        self.assertEqual(reply, revised)
         self.assertEqual(_reply_errors(reply, session), [])
         rewrite.assert_called_once()
 

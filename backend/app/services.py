@@ -82,15 +82,6 @@ _OUTGROUP_FILTER_SYSTEM = (
 
 _OUTGROUP_FILTER_TEMPERATURE = 0.5
 
-_OUTGROUP_PERSPECTIVE_LEADS = (
-    "从一个分析者的视角来看",
-    "作为一个第三方，我客观地说",
-    "客观来讲",
-    "从外部视角分析",
-    "站在一个旁观者的角度来看",
-    "跳出你作为当事人的立场，从局外人的角度来看",
-)
-
 def session_condition(session: UserSession) -> ConditionConfig:
     code = session.completion_code or session.user_id
     return condition_from_session(
@@ -557,13 +548,6 @@ def _limit_outgroup_analysis(reply: str, limit: int = 4) -> str:
     return f"{shortened}\n\n{remainder}" if shortened else remainder
 
 
-def _add_outgroup_perspective_lead(reply: str) -> str:
-    """在 outgroup 回复开头随机加入一个外部视角提示语。"""
-    if not reply or any(reply.startswith(lead) for lead in _OUTGROUP_PERSPECTIVE_LEADS):
-        return reply
-    return f"{random.choice(_OUTGROUP_PERSPECTIVE_LEADS)}，{reply}"
-
-
 def _finalize_reply(content: str, session: UserSession) -> str:
     reply = _ensure_reply_layers(content)
     if _is_advice_round(session):
@@ -571,7 +555,6 @@ def _finalize_reply(content: str, session: UserSession) -> str:
         reply = _remove_late_advice_analysis(reply, session)
     if session.emotion_label == "outgroup":
         reply = _limit_outgroup_analysis(reply)
-        reply = _add_outgroup_perspective_lead(reply)
     return reply
 
 
