@@ -53,8 +53,8 @@ class ConditionTests(unittest.TestCase):
                 self.assertIn("第一条建议之前另起一段", prompt)
                 self.assertIn("一些可操作的方法或意见", prompt)
                 self.assertIn("不要机械重复固定模板", prompt)
-                self.assertIn("整轮回复末尾另起一行加入一个自然的引导问题", prompt)
-                self.assertIn("只问一个核心问题", prompt)
+                self.assertNotIn("整轮回复末尾另起一行加入一个自然的引导问题", prompt)
+                self.assertNotIn("只问一个核心问题", prompt)
                 self.assertNotIn("分析＋引导问题", prompt)
 
     def test_late_advice_first_four_topics_then_placeholder(self):

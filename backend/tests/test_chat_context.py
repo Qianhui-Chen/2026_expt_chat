@@ -100,7 +100,7 @@ class ChatContextTests(unittest.TestCase):
     def test_stance_and_question_checks_do_not_include_length(self):
         session = UserSession(position_label="early_advice", emotion_label="ingroup", ai_round_count=0)
         unstructured = "这条回复没有分段，也没有使用项目符号。"
-        self.assertEqual(len(_reply_errors(unstructured, session)), 5)
+        self.assertEqual(len(_reply_errors(unstructured, session)), 4)
         self.assertNotIn("整轮超过400字", _reply_errors("甲" * 401, session))
 
     def test_outgroup_rejects_empathetic_alignment_and_requires_evaluation(self):
@@ -132,14 +132,14 @@ class ChatContextTests(unittest.TestCase):
             [],
         )
 
-    def test_early_advice_requires_exactly_one_question_at_the_end(self):
+    def test_early_advice_does_not_require_a_question_at_the_end(self):
         session = UserSession(position_label="early_advice", emotion_label="outgroup", ai_round_count=0)
-        base = "我不赞同你当前的判断；目前无法判断责任归属，对方也可能有自己的道理。"
-        self.assertIn("意见阶段回复末尾必须有且只有一个自然的引导问题", _reply_errors(base, session))
-        self.assertIn(
-            "意见阶段回复末尾必须有且只有一个自然的引导问题",
-            _reply_errors(base + "你怎么看？你准备怎么办？", session),
+        reply = (
+            "我不赞同你当前的判断；目前无法判断责任归属，对方也可能有自己的道理。\n\n"
+            "接下来可以尝试以下几种具体做法。\n\n"
+            "- **建议一**：内容一\n- **建议二**：内容二\n- **建议三**：内容三"
         )
+        self.assertEqual(_reply_errors(reply, session), [])
 
     def test_early_advice_requires_exactly_three_suggestions(self):
         session = UserSession(position_label="early_advice", emotion_label="outgroup", ai_round_count=0)
@@ -152,7 +152,7 @@ class ChatContextTests(unittest.TestCase):
     def test_late_advice_rounds_require_a_question_after_advice(self):
         session = UserSession(position_label="late_advice", emotion_label="outgroup", ai_round_count=4)
         base = "我不赞同你当前的判断；目前无法判断责任归属，对方也可能有自己的道理。"
-        self.assertIn("意见阶段回复末尾必须有且只有一个自然的引导问题", _reply_errors(base, session))
+        self.assertIn("late advice意见阶段回复末尾必须有且只有一个自然的引导问题", _reply_errors(base, session))
         valid = (
             base
             + "\n\n接下来可以尝试以下几种具体做法。"
@@ -163,7 +163,7 @@ class ChatContextTests(unittest.TestCase):
 
         session.ai_round_count = 3
         errors = _reply_errors(base, session)
-        self.assertNotIn("意见阶段回复末尾必须有且只有一个自然的引导问题", errors)
+        self.assertNotIn("late advice意见阶段回复末尾必须有且只有一个自然的引导问题", errors)
         self.assertIn("late advice前四轮必须围绕本轮主题提出恰好两个问题", errors)
 
     def test_advice_round_keeps_only_first_three_items_and_final_question(self):

@@ -466,7 +466,7 @@ def _mock_ai_reply(session: UserSession) -> str:
         reply = f"我理解你的感受，也会持续支持你。（第{round_no}轮模拟回复。）"
     else:
         reply = f"我不赞同你当前的判断；目前无法判断责任归属，对方也可能有自己的道理。（第{round_no}轮模拟回复。）"
-    if _is_advice_round(session):
+    if session.position_label == "late_advice" and session.ai_round_count >= 4:
         reply += "\n\n你接下来最想改善哪一部分？"
     return reply
 
@@ -628,9 +628,10 @@ def _reply_errors(content: str, session: UserSession) -> list[str]:
         ]
         if len(sections) < 2:
             errors.append("意见阶段在立场与建议之间必须有一句自然的过渡句")
-        question_count = content.count("？") + content.count("?")
-        if question_count != 1 or not content.rstrip().endswith(("？", "?")):
-            errors.append("意见阶段回复末尾必须有且只有一个自然的引导问题")
+        if session.position_label == "late_advice":
+            question_count = content.count("？") + content.count("?")
+            if question_count != 1 or not content.rstrip().endswith(("？", "?")):
+                errors.append("late advice意见阶段回复末尾必须有且只有一个自然的引导问题")
     return errors
 
 
