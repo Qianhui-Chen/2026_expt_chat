@@ -13,6 +13,7 @@ from app.services import (
     _finalize_reply,
     _limit_advice_items,
     _limit_outgroup_analysis,
+    _merge_late_question_paragraphs,
     _remove_late_advice_analysis,
     _reply_errors,
     _validated_reply,
@@ -110,10 +111,10 @@ class ChatContextTests(unittest.TestCase):
         self.assertIn("outgroup立场缺少责任不确定、其他解释或换位评估", errors)
         self.assertEqual(
             _reply_errors(
-                "我不赞同你当前的判断；目前无法判断责任归属，对方也可能有自己的道理。\n\n"
+                "客观来看，我不赞同你当前的判断；目前无法判断责任归属，对方也可能有自己的道理。\n\n"
                 "接下来可以尝试以下几种具体做法。\n\n"
                 "- **建议一**：内容一\n- **建议二**：内容二\n- **建议三**：内容三\n\n"
-                "你愿意说说对方当时是怎么回应的吗？",
+                "我们可以继续聊聊这件事。",
                 session,
             ),
             [],
@@ -126,20 +127,37 @@ class ChatContextTests(unittest.TestCase):
                 "我理解你的感受，也会持续支持你。\n\n"
                 "接下来可以尝试以下几种具体做法。\n\n"
                 "- **建议一**：内容一\n- **建议二**：内容二\n- **建议三**：内容三\n\n"
-                "你现在最想先改善什么？",
+                "你也可以继续分享任何你觉得重要的事情。",
                 session,
             ),
             [],
         )
 
-    def test_early_advice_does_not_require_a_question_at_the_end(self):
+    def test_early_advice_requires_a_non_question_closing(self):
         session = UserSession(position_label="early_advice", emotion_label="outgroup", ai_round_count=0)
         reply = (
-            "我不赞同你当前的判断；目前无法判断责任归属，对方也可能有自己的道理。\n\n"
+            "客观来看，我不赞同你当前的判断；目前无法判断责任归属，对方也可能有自己的道理。\n\n"
+            "接下来可以尝试以下几种具体做法。\n\n"
+            "- **建议一**：内容一\n- **建议二**：内容二\n- **建议三**：内容三\n\n"
+            "如果你愿意，可以继续说说你的想法。"
+        )
+        self.assertEqual(_reply_errors(reply, session), [])
+        self.assertIn(
+            "early advice不得使用问句或问号",
+            _reply_errors(reply + "你怎么看？", session),
+        )
+
+    def test_early_advice_requires_a_concrete_closing_after_bullets(self):
+        session = UserSession(position_label="early_advice", emotion_label="ingroup", ai_round_count=0)
+        without_closing = (
+            "我理解你的感受，也会持续支持你。\n\n"
             "接下来可以尝试以下几种具体做法。\n\n"
             "- **建议一**：内容一\n- **建议二**：内容二\n- **建议三**：内容三"
         )
-        self.assertEqual(_reply_errors(reply, session), [])
+        self.assertIn(
+            "early advice三条建议后必须另起一段提供具体的最后一步操作",
+            _reply_errors(without_closing, session),
+        )
 
     def test_early_advice_requires_exactly_three_suggestions(self):
         session = UserSession(position_label="early_advice", emotion_label="outgroup", ai_round_count=0)
@@ -151,7 +169,7 @@ class ChatContextTests(unittest.TestCase):
 
     def test_late_advice_rounds_require_a_question_after_advice(self):
         session = UserSession(position_label="late_advice", emotion_label="outgroup", ai_round_count=4)
-        base = "我不赞同你当前的判断；目前无法判断责任归属，对方也可能有自己的道理。"
+        base = "客观来看，我不赞同你当前的判断；目前无法判断责任归属，对方也可能有自己的道理。"
         self.assertIn("late advice意见阶段回复末尾必须有且只有一个自然的引导问题", _reply_errors(base, session))
         valid = (
             base
@@ -237,8 +255,8 @@ class ChatContextTests(unittest.TestCase):
         session = UserSession(position_label="late_advice", emotion_label="outgroup", ai_round_count=2)
         draft = "责任未明。" * 60
         revised = (
-            "我不赞同你当前的判断；目前无法判断责任归属，还需要了解双方过去的互动。\n\n"
-            "你们过去通常如何沟通？发生分歧时谁会先开口？"
+            "站在旁观者的角度来看，我不赞同你当前的判断；目前无法判断责任归属，还需要了解双方过去的互动。\n\n"
+            "我对你们过去的互动还有些不太清楚，想再确认一下：你们过去通常如何沟通？发生分歧时通常由谁先开口？"
         )
         with patch("app.services._create_chat_completion", return_value=revised) as rewrite:
             reply = _validated_reply(draft, session, object(), [], 0.3, 520)
@@ -246,17 +264,42 @@ class ChatContextTests(unittest.TestCase):
         self.assertEqual(_reply_errors(reply, session), [])
         rewrite.assert_called_once()
 
-    def test_late_first_four_rounds_require_exactly_two_questions(self):
+    def test_late_first_four_rounds_require_two_paragraphs_and_two_questions(self):
         session = UserSession(position_label="late_advice", emotion_label="outgroup", ai_round_count=1)
-        base = "我不赞同你当前的判断；目前无法判断责任归属，对方也可能有自己的道理。"
+        base = "作为第三方，客观地看，我不赞同你当前的判断；目前无法判断责任归属，对方也可能有自己的道理。"
+        valid = base + "\n\n我还有一点没有弄清楚，想确认一下：你当时是什么感受？你如何理解这种感受？"
+        self.assertEqual(_reply_errors(valid, session), [])
         self.assertIn(
             "late advice前四轮必须围绕本轮主题提出恰好两个问题",
-            _reply_errors(base + "你当时是什么感受？", session),
+            _reply_errors(base + "\n\n我还有一点没有弄清楚，想确认一下：你当时是什么感受？", session),
         )
-        self.assertEqual(
-            _reply_errors(base + "你当时是什么感受？你如何解释这件事？", session),
-            [],
+        self.assertIn(
+            "late advice前四轮必须严格输出两个自然段",
+            _reply_errors(base + "\n\n我还有一点没有弄清楚。\n\n你当时是什么感受？", session),
         )
+
+    def test_late_first_four_merge_stance_and_analysis_into_first_paragraph(self):
+        session = UserSession(position_label="late_advice", emotion_label="outgroup", ai_round_count=1)
+        split_reply = (
+            "我不赞同你当前的判断。\n\n"
+            "目前信息不足以判断责任。对方也可能有自己的考虑。单一叙述不足以覆盖事情全貌。\n\n"
+            "我可能还没有准确把握你当时的感受，想进一步了解：你当时最强烈的感受是什么？这种感受持续了多久？"
+        )
+        merged = _merge_late_question_paragraphs(split_reply, session)
+        self.assertEqual(len(merged.split("\n\n")), 2)
+        self.assertIn("我不赞同你当前的判断。目前信息不足", merged.split("\n\n")[0])
+        self.assertTrue(merged.endswith("这种感受持续了多久？"))
+
+    def test_late_first_four_merge_transition_and_question_into_second_paragraph(self):
+        session = UserSession(position_label="late_advice", emotion_label="ingroup", ai_round_count=2)
+        split_reply = (
+            "我理解你的感受。你的情绪是可以接受的。这里还可以从互动模式理解。关系中的反应往往会相互影响。\n\n"
+            "我对你们以往的互动了解有限。\n\n"
+            "你们过去发生分歧时通常如何沟通？一般由谁先结束沉默？"
+        )
+        merged = _merge_late_question_paragraphs(split_reply, session)
+        self.assertEqual(len(merged.split("\n\n")), 2)
+        self.assertIn("互动了解有限。你们过去", merged.split("\n\n")[1])
 
 
 if __name__ == "__main__":

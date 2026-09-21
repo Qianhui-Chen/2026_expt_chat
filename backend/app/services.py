@@ -548,8 +548,35 @@ def _limit_outgroup_analysis(reply: str, limit: int = 4) -> str:
     return f"{shortened}\n\n{remainder}" if shortened else remainder
 
 
+def _merge_late_question_paragraphs(reply: str, session: UserSession) -> str:
+    """将 late 前四轮整理为“立场+分析”和“过渡语+问题”两个自然段。"""
+    if session.position_label != "late_advice" or session.ai_round_count >= 4:
+        return reply
+    sections = [
+        section.strip()
+        for section in re.split(r"\n\s*\n", reply)
+        if section.strip()
+    ]
+    if len(sections) <= 2:
+        return reply
+
+    if len(sections) == 3:
+        first_sentence_count = len(re.findall(r"[^。！？!?]+[。！？!?]?", sections[0]))
+        if first_sentence_count >= 3:
+            first = sections[0]
+            second = "".join(sections[1:])
+        else:
+            first = "".join(sections[:2])
+            second = sections[2]
+    else:
+        first = "".join(sections[:-2])
+        second = "".join(sections[-2:])
+    return f"{first}\n\n{second}"
+
+
 def _finalize_reply(content: str, session: UserSession) -> str:
     reply = _ensure_reply_layers(content)
+    reply = _merge_late_question_paragraphs(reply, session)
     if _is_advice_round(session):
         reply = _limit_advice_items(reply)
         reply = _remove_late_advice_analysis(reply, session)
@@ -585,6 +612,10 @@ _OUTGROUP_OPPOSITION_MARKERS = (
     "缺乏依据", "过于片面", "可能片面", "有失偏颇", "不能据此", "并不能说明",
     "不一定", "未必",
 )
+_OUTGROUP_PERSPECTIVE_MARKERS = (
+    "分析者的视角", "第三方", "客观地看", "客观来看", "客观角度",
+    "局外人", "旁观者", "跳出当事人", "事件之外", "外部观察者", "外部视角",
+)
 
 
 def _stance_errors(content: str, session: UserSession) -> list[str]:
@@ -604,6 +635,8 @@ def _stance_errors(content: str, session: UserSession) -> list[str]:
             errors.append("outgroup立场缺少责任不确定、其他解释或换位评估")
         if not any(marker in content for marker in _OUTGROUP_OPPOSITION_MARKERS):
             errors.append("outgroup立场缺少对用户判断的明确反对")
+        if not any(marker in content for marker in _OUTGROUP_PERSPECTIVE_MARKERS):
+            errors.append("outgroup回复开头缺少第三方或外部视角表达")
         return errors
 
     return [f"未知组别条件：{session.emotion_label}"]
@@ -613,8 +646,15 @@ def _reply_errors(content: str, session: UserSession) -> list[str]:
     errors = _stance_errors(content, session)
     if session.position_label == "late_advice" and session.ai_round_count < 4:
         question_count = content.count("？") + content.count("?")
-        if question_count != 2:
+        if question_count != 2 or not content.rstrip().endswith(("？", "?")):
             errors.append("late advice前四轮必须围绕本轮主题提出恰好两个问题")
+        sections = [
+            section.strip()
+            for section in re.split(r"\n\s*\n", content)
+            if section.strip()
+        ]
+        if len(sections) != 2:
+            errors.append("late advice前四轮必须严格输出两个自然段")
     if _is_advice_round(session):
         advice_count = len(re.findall(r"(?m)^\s*[-*•]\s+", content))
         if advice_count != 3:
@@ -632,6 +672,13 @@ def _reply_errors(content: str, session: UserSession) -> list[str]:
             question_count = content.count("？") + content.count("?")
             if question_count != 1 or not content.rstrip().endswith(("？", "?")):
                 errors.append("late advice意见阶段回复末尾必须有且只有一个自然的引导问题")
+        else:
+            question_count = content.count("？") + content.count("?")
+            if question_count != 0:
+                errors.append("early advice不得使用问句或问号")
+            advice_items = list(re.finditer(r"(?m)^\s*[-*•]\s+.*$", content))
+            if advice_items and not content[advice_items[-1].end():].strip():
+                errors.append("early advice三条建议后必须另起一段提供具体的最后一步操作")
     return errors
 
 
