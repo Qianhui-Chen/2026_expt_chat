@@ -85,7 +85,7 @@ export default function InstructionPage() {
 
     setNavigating(true);
     try {
-      await trackClick("instruction", "start-chat");
+      void trackClick("instruction", "start-chat");
       navigate("/chat");
     } finally {
       setNavigating(false);

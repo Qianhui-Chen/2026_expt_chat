@@ -114,7 +114,7 @@ export default function MeetYourBotPage() {
 
     setNavigating(true);
     try {
-      await trackClick("meet", "next");
+      void trackClick("meet", "next");
       navigate("/chat");
     } finally {
       setNavigating(false);
